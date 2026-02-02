@@ -64,12 +64,13 @@ export default function ShareClient({ code }: { code: string }) {
   const [autoQuality, setAutoQuality] = useState<Quality>("medium");
   const [debugLine, setDebugLine] = useState<string>("");
 
+  const [showSelfShareHint, setShowSelfShareHint] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const channelRef = useRef<any>(null);
 
-  // Handshake: bewaar laatste offer om opnieuw te kunnen sturen als kind later joint
   const lastOfferRef = useRef<any>(null);
 
   const statsTimerRef = useRef<any>(null);
@@ -79,11 +80,9 @@ export default function ShareClient({ code }: { code: string }) {
   const lastBytesSentRef = useRef<number | null>(null);
   const lastStatsAtRef = useRef<number | null>(null);
 
-  // packets van kind (sticky)
   const [packets, setPackets] = useState<PacketState[]>([]);
   const [activePacketId, setActivePacketId] = useState<string | null>(null);
 
-  // Snapshot viewer refs
   const snapshotWrapRef = useRef<HTMLDivElement | null>(null);
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -133,7 +132,6 @@ export default function ShareClient({ code }: { code: string }) {
 
       try {
         if (msg.type === "hello") {
-          // FIX: kind is er nu pas → resend offer (als ouder al gestart was)
           await sendOfferAgainIfWeHaveOne();
           return;
         }
@@ -252,7 +250,6 @@ export default function ShareClient({ code }: { code: string }) {
         const COOLDOWN_MS = 8000;
         if (now - lastDecisionAtRef.current < COOLDOWN_MS) return;
 
-        // Heuristiek: verlaag als loss/rtt slecht, verhoog als lang goed
         const bad = (lossPct != null && lossPct >= 4) || (rttMs != null && rttMs >= 450) || (kbps != null && kbps < 500);
         const good = (lossPct != null && lossPct <= 1.2) && (rttMs != null && rttMs <= 220) && (kbps != null && kbps >= 900);
 
@@ -294,6 +291,7 @@ export default function ShareClient({ code }: { code: string }) {
 
   async function stopShare() {
     stopStatsLoop();
+    setShowSelfShareHint(false);
 
     try {
       pcRef.current?.close();
@@ -323,11 +321,11 @@ export default function ShareClient({ code }: { code: string }) {
   async function startShare() {
     await stopShare();
     setStatus("sharing");
+    setShowSelfShareHint(true);
 
     const ch = supabase.channel(`signal:${code}`);
     channelRef.current = ch;
 
-    // create pc
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
@@ -349,20 +347,28 @@ export default function ShareClient({ code }: { code: string }) {
           frameRate: qualityParams(quality).frameRate,
         },
         audio: false,
+
+        // ✅ Chromium-hints om "deel niet huidige tab" te stimuleren
+        // (wordt genegeerd in browsers die dit niet kennen)
+        preferCurrentTab: false,
+        selfBrowserSurface: "exclude",
+        surfaceSwitching: "include",
+        systemAudio: "exclude",
       });
 
       streamRef.current = stream;
 
+      // Als gebruiker stopt via browser UI → status terug
       const track = stream.getVideoTracks()[0];
+      track.addEventListener("ended", () => stopShare());
+
       pc.addTrack(track, stream);
 
-      // show local preview
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.play?.().catch(() => {});
       }
 
-      // offer
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
@@ -380,7 +386,6 @@ export default function ShareClient({ code }: { code: string }) {
       ch.subscribe();
       setStatus("sharing");
 
-      // stats auto loop
       startStatsLoop();
     } catch (e) {
       console.error(e);
@@ -390,7 +395,7 @@ export default function ShareClient({ code }: { code: string }) {
     }
   }
 
-  // Snapshot overlay drawing loop (kind shapes)
+  // Snapshot overlay drawing loop (shapes)
   useEffect(() => {
     let raf = 0;
 
@@ -513,7 +518,6 @@ export default function ShareClient({ code }: { code: string }) {
       sidebarTitle="Ouder"
       sidebar={
         <div className="flex flex-col gap-3">
-          {/* Info */}
           <div className="rounded-xl bg-white/5 border border-white/10 p-3">
             <div className="text-sm text-white/60">Code</div>
             <div className="text-lg font-mono text-white">{code}</div>
@@ -532,7 +536,6 @@ export default function ShareClient({ code }: { code: string }) {
             ) : null}
           </div>
 
-          {/* Share controls */}
           <div className="rounded-xl bg-white/5 border border-white/10 p-3">
             <div className="text-sm text-white/60 mb-2">Delen</div>
 
@@ -566,7 +569,6 @@ export default function ShareClient({ code }: { code: string }) {
             </div>
           </div>
 
-          {/* Aanwijzingen */}
           <div className="rounded-xl bg-white/5 border border-white/10 p-3">
             <div className="flex items-center justify-between gap-2 mb-2">
               <div className="text-sm text-white/60">Aanwijzingen</div>
@@ -615,21 +617,35 @@ export default function ShareClient({ code }: { code: string }) {
       }
     >
       <ViewerStage>
-        {/* viewer rechts fullscreen */}
         <div className="absolute inset-0">
           {active ? (
             <div ref={snapshotWrapRef} className="absolute inset-0" style={{ position: "relative" }}>
               <img src={active.snapshotJpeg} alt="Snapshot" className="w-full h-full object-contain block" />
               <canvas ref={snapshotCanvasRef} className="absolute inset-0" style={{ pointerEvents: "none" }} />
 
-              {/* kleine overlay controls */}
               <div className="absolute top-3 left-3 flex flex-wrap gap-2">
                 <Button onClick={() => setActivePacketId(null)}>Terug naar live</Button>
                 <Button onClick={clearAll}>Wis alles</Button>
               </div>
             </div>
           ) : (
-            <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
+            <>
+              <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
+
+              {/* ✅ Waarschuwing tegen “spiegel” */}
+              {showSelfShareHint ? (
+                <div className="absolute top-3 right-3 max-w-[420px] rounded-2xl bg-black/70 border border-white/15 text-white p-3 text-sm">
+                  <div className="font-semibold mb-1">Let op: voorkom spiegeling</div>
+                  <div className="text-white/80">
+                    Kies in de share picker <b>een ander venster</b> of <b>je hele scherm</b> — deel <b>niet</b> deze tab
+                    (kijkevenmee), anders krijg je een oneindige spiegel.
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <Button onClick={() => setShowSelfShareHint(false)}>Ok</Button>
+                  </div>
+                </div>
+              ) : null}
+            </>
           )}
         </div>
       </ViewerStage>
