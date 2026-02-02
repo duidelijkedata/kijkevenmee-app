@@ -20,6 +20,7 @@ type DrawPacket = {
 };
 
 type SignalMsg =
+  | { type: "hello"; at: number }
   | { type: "offer"; sdp: any }
   | { type: "answer"; sdp: any }
   | { type: "ice"; candidate: any }
@@ -164,7 +165,11 @@ export default function KindVerbinden() {
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
-        ch.send({ type: "broadcast", event: "signal", payload: { type: "ice", candidate: e.candidate } satisfies SignalMsg });
+        ch.send({
+          type: "broadcast",
+          event: "signal",
+          payload: { type: "ice", candidate: e.candidate } satisfies SignalMsg,
+        });
       }
     };
 
@@ -178,7 +183,12 @@ export default function KindVerbinden() {
           await pcRef.current.setRemoteDescription(msg.sdp);
           const answer = await pcRef.current.createAnswer();
           await pcRef.current.setLocalDescription(answer);
-          await ch.send({ type: "broadcast", event: "signal", payload: { type: "answer", sdp: answer } satisfies SignalMsg });
+
+          await ch.send({
+            type: "broadcast",
+            event: "signal",
+            payload: { type: "answer", sdp: answer } satisfies SignalMsg,
+          });
 
           setStatus("connected");
           setConnected(true);
@@ -191,7 +201,18 @@ export default function KindVerbinden() {
         console.error(e);
         setStatus("error");
       }
-    }).subscribe();
+    });
+
+    // Subscribe + HELLO handshake (fix: ouder kan al gestart zijn)
+    ch.subscribe((st: string) => {
+      if (st === "SUBSCRIBED") {
+        ch.send({
+          type: "broadcast",
+          event: "signal",
+          payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
+        });
+      }
+    });
   }
 
   async function disconnect() {
@@ -222,7 +243,7 @@ export default function KindVerbinden() {
     } catch {}
   }
 
-  // pointer -> normalized (relative to unscaled video box)
+  // pointer -> normalized
   function pointerToNormalized(e: React.PointerEvent) {
     const vp = viewportRef.current;
     const vid = videoRef.current;
@@ -321,7 +342,6 @@ export default function KindVerbinden() {
           const tx = pan.x + s.x * baseW * zoom;
           const ty = pan.y + s.y * baseH * zoom;
           const r = s.r * Math.max(baseW, baseH) * zoom;
-
           ctx.beginPath();
           ctx.arc(tx, ty, r, 0, Math.PI * 2);
           ctx.stroke();
@@ -354,7 +374,7 @@ export default function KindVerbinden() {
     };
   }, [draft, pan.x, pan.y, zoom]);
 
-  // Pan handlers (if not annotating)
+  // Pan handlers
   function onViewportPointerDown(e: React.PointerEvent) {
     if (annotate) return;
     if (zoom <= 1) return;
@@ -371,7 +391,7 @@ export default function KindVerbinden() {
     panDragRef.current.dragging = false;
   }
 
-  // Draw handlers (draft only)
+  // Draw handlers
   function onCanvasPointerDown(e: React.PointerEvent) {
     if (!annotate || !connected) return;
     (e.currentTarget as any).setPointerCapture?.(e.pointerId);
@@ -451,12 +471,7 @@ export default function KindVerbinden() {
       return;
     }
 
-    const packet: DrawPacket = {
-      id: uid(),
-      createdAt: Date.now(),
-      snapshotJpeg: snapshot,
-      shapes: draft,
-    };
+    const packet: DrawPacket = { id: uid(), createdAt: Date.now(), snapshotJpeg: snapshot, shapes: draft };
 
     try {
       await channelRef.current?.send({
@@ -465,7 +480,6 @@ export default function KindVerbinden() {
         payload: { type: "draw_packet", packet } satisfies SignalMsg,
       });
 
-      // na delen: draft opruimen
       setDraft([]);
       previewRef.current = null;
     } catch {
@@ -477,28 +491,14 @@ export default function KindVerbinden() {
   const canConnect = raw.length === 6;
 
   return (
-    <main className="mx-auto max-w-3xl space-y-6">
-      <header className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight">Meekijken</h1>
-        <p className="text-slate-600">Vul de code in die je ouder ziet.</p>
-      </header>
-
-      <Card className="space-y-4">
-        <Input value={code} onChange={(e) => setCode(formatCode(e.target.value))} placeholder="123 456" inputMode="numeric" autoFocus />
-
-        {!connected ? (
-          <Button variant="primary" className="w-full" onClick={connect} disabled={!canConnect || status === "connecting"}>
-            {status === "connecting" ? "Verbinden…" : "Verbind"}
-          </Button>
-        ) : (
-          <Button className="w-full" onClick={disconnect}>
-            Stop meekijken
-          </Button>
-        )}
-      </Card>
-
-      <Card>
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+    <main className="mx-auto max-w-4xl px-3 pb-6">
+      {/* Compact header */}
+      <div className="pt-4 pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Meekijken</h1>
+            <p className="text-slate-600 text-sm">Kind-kant (viewer)</p>
+          </div>
           <div className="text-sm text-slate-600">
             Status: <span className="font-mono">{status}</span>
             {remoteQuality ? (
@@ -508,78 +508,39 @@ export default function KindVerbinden() {
               </>
             ) : null}
           </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={zoomOut} disabled={zoom <= 1} title="Zoom uit">
-              −
-            </Button>
-
-            <input
-              type="range"
-              min={1}
-              max={3}
-              step={0.25}
-              value={zoom}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                setZoom(v);
-                if (v === 1) setPan({ x: 0, y: 0 });
-              }}
-            />
-
-            <Button onClick={zoomIn} disabled={zoom >= 3} title="Zoom in">
-              +
-            </Button>
-
-            <div className="text-sm text-slate-600 w-14 text-right">{Math.round(zoom * 100)}%</div>
-            <Button onClick={resetView}>Reset</Button>
-            <Button onClick={fullscreen}>Fullscreen</Button>
-          </div>
         </div>
+      </div>
 
-        {isFullscreen ? (
-          <div className="mb-3 text-sm text-slate-600">
-            Fullscreen actief — druk <b>ESC</b> om terug te gaan.
-          </div>
-        ) : null}
-
-        {/* Draft UI */}
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input type="checkbox" checked={annotate} onChange={(e) => setAnnotate(e.target.checked)} disabled={!connected} />
-            Aantekeningen maken
-          </label>
-
-          <div className="text-sm text-slate-600">{annotate ? "Teken → pas aan → klik Delen met ouder." : "Tip: zoom + sleep om details te bekijken"}</div>
-
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <label className="text-sm text-slate-600">Tool</label>
-            <select value={tool} onChange={(e) => setTool(e.target.value as DrawTool)} className="h-10 rounded-xl border px-3 bg-white" disabled={!annotate}>
-              <option value="circle">Cirkel</option>
-              <option value="rect">Kader</option>
-              <option value="arrow">Pijl</option>
-            </select>
-
-            <Button onClick={() => setDraft((d) => d.slice(0, -1))} disabled={!annotate || draft.length === 0} title="Undo laatste">
-              Undo
+      {/* Connect panel: compact en verdwijnt niet, maar is klein */}
+      <Card className="p-3 mb-3">
+        <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+          <Input value={code} onChange={(e) => setCode(formatCode(e.target.value))} placeholder="123 456" inputMode="numeric" />
+          {!connected ? (
+            <Button variant="primary" onClick={connect} disabled={!canConnect || status === "connecting"} className="sm:w-40">
+              {status === "connecting" ? "Verbinden…" : "Verbind"}
             </Button>
-
-            <Button onClick={() => setDraft([])} disabled={!annotate || draft.length === 0}>
-              Wissen
+          ) : (
+            <Button onClick={disconnect} className="sm:w-40">
+              Stop
             </Button>
-
-            <Button variant="primary" onClick={shareToParent} disabled={!annotate || draft.length === 0}>
-              Delen met ouder
-            </Button>
-          </div>
+          )}
         </div>
+      </Card>
 
-        {/* Viewport */}
+      {/* VIDEO: zo groot mogelijk */}
+      <div
+        className="rounded-2xl overflow-hidden bg-black"
+        style={{
+          // zo groot mogelijk, maar ruimte voor toolbar onderin
+          height: "calc(100vh - 210px)",
+          minHeight: 360,
+          position: "relative",
+        }}
+      >
         <div
           ref={viewportRef}
-          className="rounded-xl bg-black/90 overflow-hidden"
+          className="w-full h-full"
           style={{
-            width: "100%",
             position: "relative",
             touchAction: "none",
             cursor: annotate ? "crosshair" : zoom > 1 ? (panDragRef.current.dragging ? "grabbing" : "grab") : "default",
@@ -591,7 +552,7 @@ export default function KindVerbinden() {
           onPointerLeave={onViewportPointerUp}
         >
           <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "top left", width: "100%" }}>
-            <video ref={videoRef} autoPlay playsInline className="w-full rounded-xl" />
+            <video ref={videoRef} autoPlay playsInline className="w-full h-full object-contain" />
           </div>
 
           <canvas
@@ -603,12 +564,76 @@ export default function KindVerbinden() {
             onPointerCancel={onCanvasPointerUp}
             onPointerLeave={onCanvasPointerUp}
           />
+
+          {/* Fullscreen hint */}
+          {isFullscreen ? (
+            <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2">
+              Fullscreen — druk <b>ESC</b> om terug te gaan
+            </div>
+          ) : null}
         </div>
 
-        {annotate ? (
-          <p className="mt-3 text-sm text-slate-600">Je ouder ziet pas iets nadat jij op <b>Delen met ouder</b> klikt.</p>
-        ) : null}
-      </Card>
+        {/* Slimme, compacte toolbar: onderin over het beeld */}
+        <div className="absolute left-3 right-3 bottom-3">
+          <div className="rounded-2xl bg-white/95 backdrop-blur border shadow-sm p-2">
+            <div className="flex flex-wrap items-center gap-2 justify-between">
+              <div className="flex items-center gap-2">
+                <Button onClick={zoomOut} disabled={zoom <= 1} title="Zoom uit">
+                  −
+                </Button>
+                <input
+                  type="range"
+                  min={1}
+                  max={3}
+                  step={0.25}
+                  value={zoom}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setZoom(v);
+                    if (v === 1) setPan({ x: 0, y: 0 });
+                  }}
+                  style={{ width: 140 }}
+                />
+                <Button onClick={zoomIn} disabled={zoom >= 3} title="Zoom in">
+                  +
+                </Button>
+                <div className="text-sm text-slate-600 w-14 text-right">{Math.round(zoom * 100)}%</div>
+                <Button onClick={resetView}>Reset</Button>
+                <Button onClick={fullscreen}>Fullscreen</Button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input type="checkbox" checked={annotate} onChange={(e) => setAnnotate(e.target.checked)} disabled={!connected} />
+                  Aantekeningen
+                </label>
+
+                <select value={tool} onChange={(e) => setTool(e.target.value as DrawTool)} className="h-10 rounded-xl border px-3 bg-white" disabled={!annotate}>
+                  <option value="circle">Cirkel</option>
+                  <option value="rect">Kader</option>
+                  <option value="arrow">Pijl</option>
+                </select>
+
+                <Button onClick={() => setDraft((d) => d.slice(0, -1))} disabled={!annotate || draft.length === 0} title="Undo">
+                  Undo
+                </Button>
+                <Button onClick={() => setDraft([])} disabled={!annotate || draft.length === 0}>
+                  Wissen
+                </Button>
+                <Button variant="primary" onClick={shareToParent} disabled={!annotate || draft.length === 0}>
+                  Delen
+                </Button>
+              </div>
+            </div>
+
+            {annotate ? (
+              <div className="mt-2 text-xs text-slate-600">
+                Teken → pas aan → klik <b>Delen</b>. Ouder ziet het als screenshot met overlay.
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
     </main>
   );
 }
