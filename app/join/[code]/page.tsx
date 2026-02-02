@@ -1,6 +1,14 @@
-import ParentShare from "./share";
+type PageProps = {
+  params: { code: string };
+};
 
-// Next.js App Router geeft `params` als een plain object (geen Promise).
-export default function Join({ params }: { params: { code: string } }) {
-  return <ParentShare code={params.code} />;
+export default function Page({ params }: PageProps) {
+  const { code } = params;
+
+  return (
+    <main className="mx-auto w-full max-w-5xl px-4 py-10">
+      {/* jouw UI hier */}
+      <div>Join code: {code}</div>
+    </main>
+  );
 }
