@@ -16,7 +16,9 @@ type SessionPayload =
   | { token_hash: string; type: string };
 
 export async function POST(req: Request) {
-  const cookieStore = cookies();
+  // ✅ Next 15: cookies() is (in jouw setup) async getypt
+  const cookieStore = await cookies();
+
   const res = NextResponse.json({ ok: true });
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -49,7 +51,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  // ✅ PKCE: magic link komt terug met ?code=... (meest voorkomend)
+  // ✅ PKCE: magic link -> /auth/callback?code=...
   if (body?.code && typeof body.code === "string") {
     const { error } = await supabase.auth.exchangeCodeForSession(body.code);
     if (error) {
@@ -58,7 +60,7 @@ export async function POST(req: Request) {
     return res;
   }
 
-  // ✅ Implicit: tokens in hash (legacy / sommige flows)
+  // ✅ Implicit tokens (legacy)
   if (
     body?.access_token &&
     body?.refresh_token &&
@@ -75,7 +77,7 @@ export async function POST(req: Request) {
     return res;
   }
 
-  // ✅ OTP verify via token_hash/type (optioneel)
+  // ✅ OTP verify (optioneel)
   if (
     body?.token_hash &&
     body?.type &&
@@ -84,7 +86,6 @@ export async function POST(req: Request) {
   ) {
     const { error } = await supabase.auth.verifyOtp({
       token_hash: body.token_hash,
-      // Supabase verwacht een specifieke string-union; we laten TS niet moeilijk doen:
       type: body.type as any,
     });
     if (error) {
