@@ -2,10 +2,21 @@
 
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { createClient } from "@supabase/supabase-js";
+
+function getSupabaseClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !anon) {
+    // Dit zie je alleen client-side; helpt debuggen als env vars missen.
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  }
+
+  return createClient(url, anon);
+}
 
 export default function KindLoginPage() {
-  const supabase = useMemo(() => createClient(), []);
   const sp = useSearchParams();
 
   const [email, setEmail] = useState("");
@@ -14,6 +25,8 @@ export default function KindLoginPage() {
 
   const error = sp.get("error");
   const next = sp.get("next") ?? "/kind";
+
+  const supabase = useMemo(() => getSupabaseClient(), []);
 
   const sendMagicLink = async () => {
     setBusy(true);
@@ -25,7 +38,7 @@ export default function KindLoginPage() {
           ? window.location.origin
           : "https://kijkevenmee-app.vercel.app";
 
-      // ✅ Dit is de essentie: ALTIJD naar /auth/callback met next=...
+      // ✅ ALTIJD terug naar /auth/callback
       const emailRedirectTo = `${origin}/auth/callback?next=${encodeURIComponent(next)}`;
 
       const { error } = await supabase.auth.signInWithOtp({
@@ -41,6 +54,8 @@ export default function KindLoginPage() {
       }
 
       setStatus("Check je e-mail en klik op de inloglink.");
+    } catch (e: any) {
+      setStatus(`Fout: ${e?.message ?? "onbekend"}`);
     } finally {
       setBusy(false);
     }
