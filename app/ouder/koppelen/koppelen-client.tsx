@@ -2,17 +2,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { createBrowserClient } from "@supabase/ssr";
 
 function getSupabaseClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anon) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  return createClient(url, anon);
+  return createBrowserClient(url, anon);
 }
 
 function generateCode() {
-  // KEM-XXXXXX (letters+digits, zonder lastige tekens)
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let s = "KEM-";
   for (let i = 0; i < 6; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
@@ -56,6 +55,7 @@ export default function KoppelenClient() {
 
   useEffect(() => {
     (async () => {
+      // ✅ Nu werkt dit ook met SSR cookies
       const { data } = await supabase.auth.getUser();
       const uid = data?.user?.id ?? null;
 
@@ -75,14 +75,17 @@ export default function KoppelenClient() {
     setStatus(null);
 
     try {
-      // retry bij collision op unique(code)
+      if (!userId) {
+        setStatus("Niet ingelogd.");
+        return;
+      }
+
       for (let attempt = 0; attempt < 5; attempt++) {
         const code = generateCode();
 
         const { error } = await supabase.from("helper_invites").insert({
           code,
           helper_id: userId,
-          // expires_at default (7 days) in DB
         });
 
         if (!error) {
@@ -91,10 +94,9 @@ export default function KoppelenClient() {
           return;
         }
 
-        // 23505 = unique_violation (Postgres), in supabase-js vaak als string/code in message
         const msg = (error as any)?.message ?? "";
         if (msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("unique")) {
-          continue; // probeer nieuwe code
+          continue;
         }
 
         setStatus(`Fout: ${msg}`);
@@ -121,7 +123,7 @@ export default function KoppelenClient() {
     <main style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui", padding: "0 16px" }}>
       <h1 style={{ fontSize: 22, margin: "0 0 8px 0" }}>Koppelen met kind</h1>
       <p style={{ color: "#475569", marginTop: 0 }}>
-        Maak een koppelcode aan en stuur de link naar je ouder (of kind) om te koppelen.
+        Maak een koppelcode aan en stuur de link naar je kind om te koppelen.
       </p>
 
       <button

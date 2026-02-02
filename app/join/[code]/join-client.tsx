@@ -2,13 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { createBrowserClient } from "@supabase/ssr";
 
 function getSupabaseClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anon) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  return createClient(url, anon);
+  return createBrowserClient(url, anon);
 }
 
 type Invite = {
@@ -31,7 +31,7 @@ export default function JoinClient({ code }: { code: string }) {
 
   useEffect(() => {
     (async () => {
-      // moet ingelogd zijn om te koppelen
+      // ✅ Nu werkt dit ook met SSR cookies
       const { data } = await supabase.auth.getUser();
       const uid = data?.user?.id ?? null;
 
@@ -40,7 +40,6 @@ export default function JoinClient({ code }: { code: string }) {
         return;
       }
 
-      // invite ophalen
       const { data: inv, error } = await supabase
         .from("helper_invites")
         .select("id, code, helper_id, status, expires_at, created_at")
@@ -54,7 +53,6 @@ export default function JoinClient({ code }: { code: string }) {
         return;
       }
 
-      // status checks client-side (RLS doet ook al wat)
       if (inv.status !== "open") {
         setMessage("Deze koppelcode is al gebruikt of niet meer geldig.");
       } else if (new Date(inv.expires_at).getTime() < Date.now()) {
@@ -120,7 +118,9 @@ export default function JoinClient({ code }: { code: string }) {
         ) : null}
       </div>
 
-      {message ? <p style={{ marginTop: 12, color: message.startsWith("✅") ? "#16a34a" : "#b91c1c" }}>{message}</p> : null}
+      {message ? (
+        <p style={{ marginTop: 12, color: message.startsWith("✅") ? "#16a34a" : "#b91c1c" }}>{message}</p>
+      ) : null}
 
       <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
         <button
