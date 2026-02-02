@@ -1,9 +1,7 @@
 import { Suspense } from "react";
-import JoinClient from "./join-client";
+import KoppelenClient from "./koppelen-client";
 
-export default async function Page(props: { params: Promise<{ code: string }> }) {
-  const { code } = await props.params;
-
+export default function Page() {
   return (
     <Suspense
       fallback={
@@ -13,7 +11,7 @@ export default async function Page(props: { params: Promise<{ code: string }> })
         </main>
       }
     >
-      <JoinClient code={code} />
+      <KoppelenClient />
     </Suspense>
   );
 }
