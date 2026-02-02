@@ -5,11 +5,12 @@ import { Card, Button, Input } from "@/components/ui";
 import { supabaseBrowser } from "@/lib/supabase/browser";
 
 type Quality = "low" | "medium" | "high";
-type DrawTool = "circle" | "rect";
+type DrawTool = "circle" | "rect" | "arrow";
 
 type DraftShape =
   | { kind: "circle"; x: number; y: number; r: number }
-  | { kind: "rect"; x: number; y: number; w: number; h: number };
+  | { kind: "rect"; x: number; y: number; w: number; h: number }
+  | { kind: "arrow"; x1: number; y1: number; x2: number; y2: number };
 
 type DrawPacket = {
   id: string;
@@ -54,10 +55,9 @@ export default function KindVerbinden() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const channelRef = useRef<any>(null);
 
-  // Zoom + pan (zoals je al had)
+  // Zoom + pan
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-
   const panDragRef = useRef<{ dragging: boolean; startX: number; startY: number; baseX: number; baseY: number }>({
     dragging: false,
     startX: 0,
@@ -66,6 +66,7 @@ export default function KindVerbinden() {
     baseY: 0,
   });
 
+  // Fullscreen detect
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
     const onFs = () => setIsFullscreen(!!document.fullscreenElement);
@@ -73,19 +74,17 @@ export default function KindVerbinden() {
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
-  // ---- Draft annotations (local only until "Delen") ----
+  // Draft annotations (local until "Delen")
   const [annotate, setAnnotate] = useState(false);
   const [tool, setTool] = useState<DrawTool>("circle");
   const [draft, setDraft] = useState<DraftShape[]>([]);
   const previewRef = useRef<DraftShape | null>(null);
-
   const drawDragRef = useRef<{ drawing: boolean; startNX: number; startNY: number }>({
     drawing: false,
     startNX: 0,
     startNY: 0,
   });
 
-  // ---- Hard cap pan ----
   function clampPan(nextPan: { x: number; y: number }, nextZoom = zoom) {
     const vp = viewportRef.current;
     const vid = videoRef.current;
@@ -111,7 +110,6 @@ export default function KindVerbinden() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoom]);
 
-  // ---- cleanup / reconnect fix ----
   async function cleanup() {
     try {
       pcRef.current?.close();
@@ -166,11 +164,7 @@ export default function KindVerbinden() {
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
-        ch.send({
-          type: "broadcast",
-          event: "signal",
-          payload: { type: "ice", candidate: e.candidate } satisfies SignalMsg,
-        });
+        ch.send({ type: "broadcast", event: "signal", payload: { type: "ice", candidate: e.candidate } satisfies SignalMsg });
       }
     };
 
@@ -184,11 +178,7 @@ export default function KindVerbinden() {
           await pcRef.current.setRemoteDescription(msg.sdp);
           const answer = await pcRef.current.createAnswer();
           await pcRef.current.setLocalDescription(answer);
-          await ch.send({
-            type: "broadcast",
-            event: "signal",
-            payload: { type: "answer", sdp: answer } satisfies SignalMsg,
-          });
+          await ch.send({ type: "broadcast", event: "signal", payload: { type: "answer", sdp: answer } satisfies SignalMsg });
 
           setStatus("connected");
           setConnected(true);
@@ -208,7 +198,7 @@ export default function KindVerbinden() {
     await cleanup();
   }
 
-  // ---- Zoom helpers ----
+  // Zoom helpers
   function zoomOut() {
     setZoom((z) => {
       const next = Math.max(1, +(z - 0.25).toFixed(2));
@@ -232,7 +222,7 @@ export default function KindVerbinden() {
     } catch {}
   }
 
-  // ---- mapping pointer -> normalized coords ----
+  // pointer -> normalized (relative to unscaled video box)
   function pointerToNormalized(e: React.PointerEvent) {
     const vp = viewportRef.current;
     const vid = videoRef.current;
@@ -253,7 +243,7 @@ export default function KindVerbinden() {
     return { nx, ny };
   }
 
-  // ---- Canvas render (draft + preview) ----
+  // Render draft shapes on canvas
   useEffect(() => {
     let raf = 0;
 
@@ -272,20 +262,39 @@ export default function KindVerbinden() {
       c.style.height = `${h}px`;
     }
 
-    function draw() {
+    function drawArrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number) {
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      const angle = Math.atan2(y2 - y1, x2 - x1);
+      const head = 18;
+      const a1 = angle - Math.PI / 7;
+      const a2 = angle + Math.PI / 7;
+
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - head * Math.cos(a1), y2 - head * Math.sin(a1));
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - head * Math.cos(a2), y2 - head * Math.sin(a2));
+      ctx.stroke();
+    }
+
+    function loop() {
       const c = canvasRef.current;
       const vp = viewportRef.current;
       const vid = videoRef.current;
 
       if (!c || !vp || !vid) {
-        raf = requestAnimationFrame(draw);
+        raf = requestAnimationFrame(loop);
         return;
       }
 
       resizeCanvas();
       const ctx = c.getContext("2d");
       if (!ctx) {
-        raf = requestAnimationFrame(draw);
+        raf = requestAnimationFrame(loop);
         return;
       }
 
@@ -302,34 +311,40 @@ export default function KindVerbinden() {
       const all = [...draft];
       if (previewRef.current) all.push(previewRef.current);
 
-      // stijl
       ctx.lineWidth = 4;
       ctx.strokeStyle = "#60a5fa";
       ctx.shadowColor = "rgba(0,0,0,0.35)";
       ctx.shadowBlur = 6;
 
       for (const s of all) {
-        // normalized -> viewport coords (incl pan/zoom)
-        const tx = pan.x + s.x * baseW * zoom;
-        const ty = pan.y + s.y * baseH * zoom;
-
         if (s.kind === "circle") {
+          const tx = pan.x + s.x * baseW * zoom;
+          const ty = pan.y + s.y * baseH * zoom;
           const r = s.r * Math.max(baseW, baseH) * zoom;
+
           ctx.beginPath();
           ctx.arc(tx, ty, r, 0, Math.PI * 2);
           ctx.stroke();
+        } else if (s.kind === "rect") {
+          const x = pan.x + s.x * baseW * zoom;
+          const y = pan.y + s.y * baseH * zoom;
+          const rw = s.w * baseW * zoom;
+          const rh = s.h * baseH * zoom;
+          ctx.strokeRect(x, y, rw, rh);
         } else {
-          const tw = s.w * baseW * zoom;
-          const th = s.h * baseH * zoom;
-          ctx.strokeRect(tx, ty, tw, th);
+          const x1 = pan.x + s.x1 * baseW * zoom;
+          const y1 = pan.y + s.y1 * baseH * zoom;
+          const x2 = pan.x + s.x2 * baseW * zoom;
+          const y2 = pan.y + s.y2 * baseH * zoom;
+          drawArrow(ctx, x1, y1, x2, y2);
         }
       }
 
       ctx.shadowBlur = 0;
-      raf = requestAnimationFrame(draw);
+      raf = requestAnimationFrame(loop);
     }
 
-    raf = requestAnimationFrame(draw);
+    raf = requestAnimationFrame(loop);
     const onResize = () => resizeCanvas();
     window.addEventListener("resize", onResize);
 
@@ -339,7 +354,7 @@ export default function KindVerbinden() {
     };
   }, [draft, pan.x, pan.y, zoom]);
 
-  // ---- Pan handlers (alleen als niet tekenen) ----
+  // Pan handlers (if not annotating)
   function onViewportPointerDown(e: React.PointerEvent) {
     if (annotate) return;
     if (zoom <= 1) return;
@@ -356,7 +371,7 @@ export default function KindVerbinden() {
     panDragRef.current.dragging = false;
   }
 
-  // ---- Draw handlers (draft only) ----
+  // Draw handlers (draft only)
   function onCanvasPointerDown(e: React.PointerEvent) {
     if (!annotate || !connected) return;
     (e.currentTarget as any).setPointerCapture?.(e.pointerId);
@@ -364,10 +379,9 @@ export default function KindVerbinden() {
     const { nx, ny } = pointerToNormalized(e);
     drawDragRef.current = { drawing: true, startNX: nx, startNY: ny };
 
-    previewRef.current =
-      tool === "circle"
-        ? { kind: "circle", x: nx, y: ny, r: 0.001 }
-        : { kind: "rect", x: nx, y: ny, w: 0.001, h: 0.001 };
+    if (tool === "circle") previewRef.current = { kind: "circle", x: nx, y: ny, r: 0.001 };
+    else if (tool === "rect") previewRef.current = { kind: "rect", x: nx, y: ny, w: 0.001, h: 0.001 };
+    else previewRef.current = { kind: "arrow", x1: nx, y1: ny, x2: nx, y2: ny };
   }
 
   function onCanvasPointerMove(e: React.PointerEvent) {
@@ -385,12 +399,14 @@ export default function KindVerbinden() {
       const dy = ny - startY;
       const r = Math.max(0.01, Math.sqrt(dx * dx + dy * dy));
       previewRef.current = { kind: "circle", x: startX, y: startY, r };
-    } else {
+    } else if (s.kind === "rect") {
       const x = Math.min(startX, nx);
       const y = Math.min(startY, ny);
       const w = Math.max(0.01, Math.abs(nx - startX));
       const h = Math.max(0.01, Math.abs(ny - startY));
       previewRef.current = { kind: "rect", x, y, w, h };
+    } else {
+      previewRef.current = { kind: "arrow", x1: startX, y1: startY, x2: nx, y2: ny };
     }
   }
 
@@ -405,7 +421,6 @@ export default function KindVerbinden() {
     setDraft((prev) => [...prev, s]);
   }
 
-  // ---- Freeze snapshot from video ----
   function captureSnapshotJpeg(): string | null {
     const v = videoRef.current;
     if (!v) return null;
@@ -426,9 +441,10 @@ export default function KindVerbinden() {
   async function shareToParent() {
     if (!connected) return;
     if (draft.length === 0) {
-      alert("Maak eerst een cirkel of kader, of kies Wissen.");
+      alert("Maak eerst een cirkel/kader/pijl en klik dan op Delen.");
       return;
     }
+
     const snapshot = captureSnapshotJpeg();
     if (!snapshot) {
       alert("Kan nog geen snapshot maken. Wacht 1 seconde en probeer opnieuw.");
@@ -449,7 +465,7 @@ export default function KindVerbinden() {
         payload: { type: "draw_packet", packet } satisfies SignalMsg,
       });
 
-      // Na delen: draft opruimen (jij kunt dit ook “laten staan” als je wilt)
+      // na delen: draft opruimen
       setDraft([]);
       previewRef.current = null;
     } catch {
@@ -468,13 +484,7 @@ export default function KindVerbinden() {
       </header>
 
       <Card className="space-y-4">
-        <Input
-          value={code}
-          onChange={(e) => setCode(formatCode(e.target.value))}
-          placeholder="123 456"
-          inputMode="numeric"
-          autoFocus
-        />
+        <Input value={code} onChange={(e) => setCode(formatCode(e.target.value))} placeholder="123 456" inputMode="numeric" autoFocus />
 
         {!connected ? (
           <Button variant="primary" className="w-full" onClick={connect} disabled={!canConnect || status === "connecting"}>
@@ -522,9 +532,7 @@ export default function KindVerbinden() {
             </Button>
 
             <div className="text-sm text-slate-600 w-14 text-right">{Math.round(zoom * 100)}%</div>
-
             <Button onClick={resetView}>Reset</Button>
-
             <Button onClick={fullscreen}>Fullscreen</Button>
           </div>
         </div>
@@ -535,34 +543,21 @@ export default function KindVerbinden() {
           </div>
         ) : null}
 
-        {/* Aanwijzen UI (draft) */}
+        {/* Draft UI */}
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={annotate}
-              onChange={(e) => setAnnotate(e.target.checked)}
-              disabled={!connected}
-              title={!connected ? "Verbind eerst met de ouder" : ""}
-            />
+            <input type="checkbox" checked={annotate} onChange={(e) => setAnnotate(e.target.checked)} disabled={!connected} />
             Aantekeningen maken
           </label>
 
-          <div className="text-sm text-slate-600">
-            {annotate ? "Teken rustig, pas als het klopt klik je op ‘Delen met ouder’." : "Tip: zoom + sleep om details te bekijken"}
-          </div>
+          <div className="text-sm text-slate-600">{annotate ? "Teken → pas aan → klik Delen met ouder." : "Tip: zoom + sleep om details te bekijken"}</div>
 
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <label className="text-sm text-slate-600">Tool</label>
-            <select
-              value={tool}
-              onChange={(e) => setTool(e.target.value as DrawTool)}
-              className="h-10 rounded-xl border px-3 bg-white"
-              disabled={!annotate}
-              title={!annotate ? "Zet Aantekeningen aan" : ""}
-            >
+            <select value={tool} onChange={(e) => setTool(e.target.value as DrawTool)} className="h-10 rounded-xl border px-3 bg-white" disabled={!annotate}>
               <option value="circle">Cirkel</option>
               <option value="rect">Kader</option>
+              <option value="arrow">Pijl</option>
             </select>
 
             <Button onClick={() => setDraft((d) => d.slice(0, -1))} disabled={!annotate || draft.length === 0} title="Undo laatste">
@@ -579,7 +574,7 @@ export default function KindVerbinden() {
           </div>
         </div>
 
-        {/* Viewport: video + canvas overlay */}
+        {/* Viewport */}
         <div
           ref={viewportRef}
           className="rounded-xl bg-black/90 overflow-hidden"
@@ -595,23 +590,13 @@ export default function KindVerbinden() {
           onPointerCancel={onViewportPointerUp}
           onPointerLeave={onViewportPointerUp}
         >
-          <div
-            style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-              transformOrigin: "top left",
-              width: "100%",
-            }}
-          >
+          <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "top left", width: "100%" }}>
             <video ref={videoRef} autoPlay playsInline className="w-full rounded-xl" />
           </div>
 
           <canvas
             ref={canvasRef}
-            style={{
-              position: "absolute",
-              inset: 0,
-              pointerEvents: annotate ? "auto" : "none",
-            }}
+            style={{ position: "absolute", inset: 0, pointerEvents: annotate ? "auto" : "none" }}
             onPointerDown={onCanvasPointerDown}
             onPointerMove={onCanvasPointerMove}
             onPointerUp={onCanvasPointerUp}
@@ -621,9 +606,7 @@ export default function KindVerbinden() {
         </div>
 
         {annotate ? (
-          <p className="mt-3 text-sm text-slate-600">
-            Je ouder ziet pas iets nadat jij op <b>Delen met ouder</b> klikt.
-          </p>
+          <p className="mt-3 text-sm text-slate-600">Je ouder ziet pas iets nadat jij op <b>Delen met ouder</b> klikt.</p>
         ) : null}
       </Card>
     </main>
