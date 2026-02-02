@@ -1,144 +1,115 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { supabaseBrowser } from "@/lib/supabase/browser";
-import { Card, Button, Input } from "@/components/ui";
+import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { createClient } from "@supabase/supabase-js";
+
+function getSupabaseClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !anon) {
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  }
+
+  return createClient(url, anon);
+}
 
 export default function LoginClient() {
-  const supabase = supabaseBrowser();
+  const sp = useSearchParams();
 
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [cooldown, setCooldown] = useState(0);
-  const [devLink, setDevLink] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (cooldown <= 0) return;
-    const t = setInterval(() => setCooldown((s) => s - 1), 1000);
-    return () => clearInterval(t);
-  }, [cooldown]);
+  const error = sp.get("error");
+  const next = sp.get("next") ?? "/kind";
 
-  async function login() {
-    if (!email || loading || cooldown > 0) return;
+  const supabase = useMemo(() => getSupabaseClient(), []);
 
-    setLoading(true);
+  const sendMagicLink = async () => {
+    setBusy(true);
+    setStatus(null);
 
     try {
-      // ✅ altijd via callback zodat sessie-cookie gezet wordt
-      const redirectTo = `${location.origin}/auth/callback?next=/kind`;
+      const origin =
+        typeof window !== "undefined" && window.location?.origin
+          ? window.location.origin
+          : "https://kijkevenmee-app.vercel.app";
 
-      // DEV: geen e-mail versturen -> magic link genereren via eigen API
-      if (process.env.NODE_ENV === "development") {
-        const res = await fetch("/api/dev/magic-link", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, redirectTo }),
-        });
+      // ✅ ALTIJD terug naar /auth/callback
+      const emailRedirectTo = `${origin}/auth/callback?next=${encodeURIComponent(next)}`;
 
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Failed to generate link");
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo },
+      });
 
-        const link = json.action_link as string | undefined;
-        if (!link) throw new Error("No action_link returned from API");
-
-        setDevLink(link);
-        setSent(true);
-        setCooldown(10);
-
-        // Ga naar Supabase link -> terug via /auth/callback -> /kind
-        window.location.href = link;
+      if (error) {
+        setStatus(`Fout: ${error.message}`);
         return;
       }
 
-      // PROD: echte mail
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: redirectTo },
-      });
-
-      if (error) throw new Error(error.message);
-
-      setSent(true);
-      setCooldown(60);
+      setStatus("Check je e-mail en klik op de inloglink.");
     } catch (e: any) {
-      alert(e?.message ?? String(e));
+      setStatus(`Fout: ${e?.message ?? "onbekend"}`);
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
-  }
-
-  const buttonText = loading
-    ? "Bezig..."
-    : cooldown > 0
-    ? `Wacht ${cooldown}s...`
-    : "Stuur login-link";
-
-  const isDev = process.env.NODE_ENV === "development";
+  };
 
   return (
-    <main className="mx-auto max-w-lg space-y-6">
-      <h1 className="text-3xl font-semibold tracking-tight">Inloggen</h1>
+    <main style={{ maxWidth: 520, margin: "40px auto", fontFamily: "system-ui", padding: "0 16px" }}>
+      <h1 style={{ fontSize: 22, margin: "0 0 8px 0" }}>Inloggen</h1>
 
-      <Card>
-        {/* Password managers (bv LastPass) injecteren soms HTML => hydration warnings */}
-        <div suppressHydrationWarning>
-          {!sent ? (
-            <>
-              <label htmlFor="email" className="block text-sm font-medium text-slate-700">
-                E-mailadres
-              </label>
+      {error ? (
+        <p style={{ color: "#b91c1c", marginTop: 0 }}>
+          Login fout: <code>{error}</code>
+        </p>
+      ) : null}
 
-              <div className="mt-2">
-                <Input
-                  id="email"
-                  name="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="naam@voorbeeld.nl"
-                  type="email"
-                  autoComplete="email"
-                  inputMode="email"
-                />
-              </div>
+      <label style={{ display: "block", margin: "16px 0 6px 0", color: "#0f172a" }}>
+        E-mailadres
+      </label>
 
-              <div className="mt-4">
-                <Button
-                  variant="primary"
-                  className="w-full"
-                  onClick={login}
-                  disabled={!email || loading || cooldown > 0}
-                >
-                  {buttonText}
-                </Button>
-              </div>
+      <input
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        placeholder="naam@domein.nl"
+        type="email"
+        autoComplete="email"
+        style={{
+          width: "100%",
+          padding: "10px 12px",
+          border: "1px solid #cbd5e1",
+          borderRadius: 10,
+          outline: "none",
+        }}
+      />
 
-              <p className="mt-3 text-sm text-slate-600">
-                {isDev
-                  ? "Dev-modus: je logt direct in via een magic link (geen e-mail verstuurd)."
-                  : "Je ontvangt een e-mail met een link om in te loggen."}
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="text-slate-700">
-                {isDev
-                  ? "Dev-modus: je wordt doorgestuurd. Als dat niet gebeurt, gebruik de link hieronder."
-                  : "Check je e-mail. Klik op de login-link om verder te gaan."}
-                {cooldown > 0 ? ` (Je kunt over ${cooldown}s opnieuw sturen.)` : ""}
-              </p>
+      <button
+        onClick={sendMagicLink}
+        disabled={busy || !email.includes("@")}
+        style={{
+          marginTop: 12,
+          width: "100%",
+          padding: "10px 12px",
+          borderRadius: 12,
+          border: "1px solid #0f172a",
+          background: busy ? "#e2e8f0" : "#0f172a",
+          color: busy ? "#0f172a" : "#ffffff",
+          cursor: busy ? "not-allowed" : "pointer",
+          fontWeight: 600,
+        }}
+      >
+        {busy ? "Bezig…" : "Stuur login-link"}
+      </button>
 
-              {isDev && devLink ? (
-                <p className="mt-3 break-all text-sm">
-                  <a className="underline" href={devLink}>
-                    Open magic link
-                  </a>
-                </p>
-              ) : null}
-            </>
-          )}
-        </div>
-      </Card>
+      {status ? <p style={{ color: "#475569", marginTop: 12 }}>{status}</p> : null}
+
+      <p style={{ color: "#64748b", marginTop: 14, fontSize: 13 }}>
+        Je wordt na het inloggen doorgestuurd naar: <code>{next}</code>
+      </p>
     </main>
   );
 }
