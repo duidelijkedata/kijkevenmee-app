@@ -7,25 +7,36 @@ import { Card, Button, Input, Textarea } from "@/components/ui";
 export default function OuderStart() {
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
-  const [created, setCreated] = useState<{ code: string; url: string } | null>(null);
+  const [created, setCreated] = useState<{ code: string } | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function start() {
     setLoading(true);
+
+    // LET OP: dit endpoint moet bestaan in jouw repo (zoals je nu al gebruikt).
     const res = await fetch("/api/sessions/create-parent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ requester_name: name || null, requester_note: note || null }),
     });
+
     const json = await res.json();
     setLoading(false);
+
     if (json.error) return alert(json.error);
 
-    const code = json.session.code as string;
-    setCreated({ code, url: `${location.origin}/join/${code}` });
+    const code = json.session.code as string; // verwacht: "123456"
+    setCreated({ code });
   }
 
-  const waText = created ? encodeURIComponent(`Klik op deze link om mee te kijken: ${created.url}`) : "";
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const shareUrl = created ? `${origin}/ouder/share/${created.code}` : "";
+  const kidUrl = created ? `${origin}/kind/verbinden` : "";
+  const waText = created
+    ? encodeURIComponent(
+        `Meekijken code: ${created.code.slice(0, 3)} ${created.code.slice(3)}\n\nKind opent: ${kidUrl}\n\nOuder scherm delen: ${shareUrl}`
+      )
+    : "";
 
   return (
     <main className="mx-auto max-w-2xl space-y-6">
@@ -36,7 +47,6 @@ export default function OuderStart() {
         </p>
       </header>
 
-      {/* ✅ Nieuw: snelkoppelingen naar koppelen/gekoppeld */}
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <h2 className="text-lg font-semibold">Koppel een kind</h2>
@@ -87,7 +97,8 @@ export default function OuderStart() {
         <>
           <Card>
             <h2 className="text-xl font-semibold">Geef deze code aan je kind</h2>
-            <p className="mt-1 text-slate-600">Je kind gebruikt deze code om met je mee te kijken.</p>
+            <p className="mt-1 text-slate-600">Kind gaat naar <span className="font-mono">/kind/verbinden</span> en vult de code in.</p>
+
             <div className="mt-4 rounded-2xl bg-slate-50 border p-4 text-center">
               <div className="text-4xl font-mono tracking-widest">
                 {created.code.slice(0, 3)} {created.code.slice(3)}
@@ -103,25 +114,24 @@ export default function OuderStart() {
               >
                 Stuur via WhatsApp
               </a>
-              <Button onClick={() => navigator.clipboard.writeText(created.url)} className="w-full">
-                Kopieer link
+              <Button
+                onClick={() => navigator.clipboard.writeText(`Code: ${created.code}\nKind: ${kidUrl}\nOuder: ${shareUrl}`)}
+                className="w-full"
+              >
+                Kopieer info
               </Button>
-            </div>
-
-            <div className="mt-4 text-sm text-slate-600 break-all">
-              Link: <span className="font-mono">{created.url}</span>
             </div>
           </Card>
 
           <Card>
             <h2 className="text-xl font-semibold">Scherm delen</h2>
             <p className="mt-1 text-slate-600">
-              Je kunt altijd stoppen. Je kind kan alleen meekijken, niet klikken of typen.
+              Klik hieronder om je scherm te delen. Je kind kan alleen kijken.
             </p>
             <div className="mt-4">
-              <a href={`/join/${created.code}`} className="block">
+              <Link href={`/ouder/share/${created.code}`} className="block">
                 <Button variant="primary" className="w-full">Ga naar scherm delen</Button>
-              </a>
+              </Link>
             </div>
           </Card>
         </>
