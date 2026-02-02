@@ -1,0 +1,12 @@
+node_modules
+.next
+.vercel
+.env
+.env.local
+
+# macOS rommel
+.DS_Store
+__MACOSX/
+
+# archief
+*.zip
