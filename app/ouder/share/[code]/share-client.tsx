@@ -51,6 +51,9 @@ export default function ShareClient({ code }: { code: string }) {
   const [auto, setAuto] = useState(true);
   const [debugLine, setDebugLine] = useState("");
 
+  // ✅ default UIT: voorkomt scherm-in-scherm loop
+  const [showPreview, setShowPreview] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -77,19 +80,6 @@ export default function ShareClient({ code }: { code: string }) {
   const origin =
     typeof window !== "undefined" && window.location?.origin ? window.location.origin : "https://kijkevenmee-app.vercel.app";
 
-  // ✅ Capture Handle config (Chromium) zodat we kunnen herkennen of iemand DEZE tab probeert te delen
-  useEffect(() => {
-    try {
-      // @ts-ignore
-      navigator.mediaDevices?.setCaptureHandleConfig?.({
-        exposeOrigin: true,
-        // uniek label voor deze app
-        handle: "kijkevenmee-parent",
-        permittedOrigins: ["*"],
-      });
-    } catch {}
-  }, []);
-
   // ✅ Maak channel 1x en blijf daarop luisteren (ook wanneer idle)
   useEffect(() => {
     const ch = supabase.channel(`signal:${code}`);
@@ -113,10 +103,7 @@ export default function ShareClient({ code }: { code: string }) {
 
         if (msg.type === "draw_packet") {
           const packet = msg.packet;
-          setPackets((prev) => [
-            ...prev,
-            { ...packet, seen: document.visibilityState === "visible" },
-          ]);
+          setPackets((prev) => [...prev, { ...packet, seen: document.visibilityState === "visible" }]);
           setActivePacketId(packet.id);
           return;
         }
@@ -242,26 +229,6 @@ export default function ShareClient({ code }: { code: string }) {
     setStatus("idle");
   }
 
-  // ✅ HARD BLOCK: geen “deze tab/app” delen → stop direct
-  function isForbiddenCapture(track: MediaStreamTrack): boolean {
-    // 1) Als browser tab-share is gekozen → heel vaak mirror-probleem
-    // (kan ook “andere tab” zijn, maar voor jullie use-case willen we tab-share vermijden)
-    const settings: any = (track as any).getSettings?.() || {};
-    if (settings.displaySurface === "browser") return true;
-
-    // 2) Chromium CaptureHandle: als de capturer onze eigen handle ziet → het is deze app/tab
-    try {
-      // @ts-ignore
-      const handle = track.getCaptureHandle?.();
-      if (!handle) return false;
-      const sameOrigin = handle.origin && typeof window !== "undefined" && handle.origin === window.location.origin;
-      const isOurHandle = handle.handle === "kijkevenmee-parent";
-      if (sameOrigin && isOurHandle) return true;
-    } catch {}
-
-    return false;
-  }
-
   async function startShare() {
     await stopShare();
     setStatus("sharing");
@@ -286,38 +253,24 @@ export default function ShareClient({ code }: { code: string }) {
       const stream = await (navigator.mediaDevices as any).getDisplayMedia({
         video: { frameRate: qualityParams(quality).frameRate },
         audio: false,
-
-        // Chromium hints (helpen, maar niet genoeg zonder block)
-        preferCurrentTab: false,
-        selfBrowserSurface: "exclude",
-        surfaceSwitching: "include",
-        systemAudio: "exclude",
       });
 
       const track = stream.getVideoTracks()[0];
-
-      // ✅ Direct blocken als "browser tab" / eigen tab / app capture
-      if (track && isForbiddenCapture(track)) {
-        // stop meteen
-        try {
-          stream.getTracks().forEach((t: any) => t.stop());
-        } catch {}
-        setStatus("idle");
-        alert("Kies 'Hele scherm' of een 'Venster'. Tab delen is niet toegestaan (voorkomt oneindige spiegeling).");
-        return;
-      }
-
-      // Als gebruiker stopt via browser UI → status terug
       track.addEventListener("ended", () => stopShare());
 
       streamRef.current = stream;
 
       pc.addTrack(track, stream);
 
-      // local preview
+      // ✅ BELANGRIJK: alleen preview tonen als user dat expliciet aanzet,
+      // anders krijg je scherm-in-scherm als je "Hele scherm" deelt.
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play?.().catch(() => {});
+        if (showPreview) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play?.().catch(() => {});
+        } else {
+          (videoRef.current as any).srcObject = null;
+        }
       }
 
       // offer
@@ -505,6 +458,16 @@ export default function ShareClient({ code }: { code: string }) {
                 Auto kwaliteit
               </label>
 
+              <label className="flex items-center gap-2 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={showPreview}
+                  onChange={(e) => setShowPreview(e.target.checked)}
+                  disabled={status === "idle"}
+                />
+                Toon preview (kan “scherm-in-scherm” geven)
+              </label>
+
               {status === "idle" ? (
                 <Button variant="primary" onClick={startShare}>
                   Deel scherm
@@ -576,8 +539,24 @@ export default function ShareClient({ code }: { code: string }) {
                 <Button onClick={clearAll}>Wis alles</Button>
               </div>
             </div>
-          ) : (
+          ) : showPreview ? (
             <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center text-white/70">
+              <div className="max-w-[560px] text-center px-6">
+                <div className="text-xl font-semibold text-white mb-2">Scherm delen is actief</div>
+                <div className="text-white/70">
+                  Om “scherm-in-scherm” te voorkomen tonen we hier standaard geen live preview.
+                  <br />
+                  Het kind ziet je scherm wél.
+                </div>
+                <div className="mt-4">
+                  <Button onClick={() => setShowPreview(true)}>
+                    Preview aan (kan loop geven)
+                  </Button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </ViewerStage>
