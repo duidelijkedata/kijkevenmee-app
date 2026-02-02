@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Card, Button } from "@/components/ui";
+import { Button } from "@/components/ui";
 import { supabaseBrowser } from "@/lib/supabase/browser";
+
+import FullscreenShell from "@/components/meekijk/FullscreenShell";
+import ViewerStage from "@/components/meekijk/ViewerStage";
 
 type Quality = "low" | "medium" | "high";
 
@@ -52,10 +55,6 @@ function clampQuality(q: Quality, dir: "down" | "up"): Quality {
   }
 }
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-
 export default function ShareClient({ code }: { code: string }) {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [status, setStatus] = useState<"idle" | "sharing" | "connected" | "error">("idle");
@@ -83,9 +82,6 @@ export default function ShareClient({ code }: { code: string }) {
   // packets van kind (sticky)
   const [packets, setPackets] = useState<PacketState[]>([]);
   const [activePacketId, setActivePacketId] = useState<string | null>(null);
-
-  // UI: lijst inklapbaar
-  const [showList, setShowList] = useState(true);
 
   // Snapshot viewer refs
   const snapshotWrapRef = useRef<HTMLDivElement | null>(null);
@@ -152,8 +148,6 @@ export default function ShareClient({ code }: { code: string }) {
             },
           ]);
           setActivePacketId(packet.id);
-          // terwijl je aanwijzing bekijkt wil je meestal meer ruimte → lijst dicht
-          setShowList(false);
           return;
         }
 
@@ -258,17 +252,9 @@ export default function ShareClient({ code }: { code: string }) {
         const COOLDOWN_MS = 8000;
         if (now - lastDecisionAtRef.current < COOLDOWN_MS) return;
 
-        const { maxBitrate } = qualityParams(autoQuality);
-
-        const bad =
-          (lossPct != null && lossPct >= 3) ||
-          (rttMs != null && rttMs >= 450) ||
-          (bitrateBps != null && bitrateBps < maxBitrate * 0.55);
-
-        const good =
-          (lossPct == null || lossPct <= 1) &&
-          (rttMs == null || rttMs <= 250) &&
-          (bitrateBps == null || bitrateBps > maxBitrate * 0.8);
+        // Heuristiek: verlaag als loss/rtt slecht, verhoog als lang goed
+        const bad = (lossPct != null && lossPct >= 4) || (rttMs != null && rttMs >= 450) || (kbps != null && kbps < 500);
+        const good = (lossPct != null && lossPct <= 1.2) && (rttMs != null && rttMs <= 220) && (kbps != null && kbps >= 900);
 
         if (bad) {
           badStreakRef.current += 1;
@@ -277,117 +263,142 @@ export default function ShareClient({ code }: { code: string }) {
           goodStreakRef.current += 1;
           badStreakRef.current = 0;
         } else {
-          badStreakRef.current = Math.max(0, badStreakRef.current - 1);
           goodStreakRef.current = Math.max(0, goodStreakRef.current - 1);
+          badStreakRef.current = Math.max(0, badStreakRef.current - 1);
         }
 
         if (badStreakRef.current >= 2) {
-          const next = clampQuality(autoQuality, "down");
-          if (next !== autoQuality && pcRef.current) {
-            await applySenderQuality(pcRef.current, next);
-            setAutoQuality(next);
-            lastDecisionAtRef.current = now;
-          }
+          setAutoQuality((q) => {
+            const next = clampQuality(q, "down");
+            if (next !== q && pcRef.current) {
+              applySenderQuality(pcRef.current, next).catch(() => {});
+              lastDecisionAtRef.current = now;
+            }
+            return next;
+          });
           badStreakRef.current = 0;
-          return;
-        }
-
-        if (goodStreakRef.current >= 5) {
-          const next = clampQuality(autoQuality, "up");
-          if (next !== autoQuality && pcRef.current) {
-            await applySenderQuality(pcRef.current, next);
-            setAutoQuality(next);
-            lastDecisionAtRef.current = now;
-          }
+        } else if (goodStreakRef.current >= 6) {
+          setAutoQuality((q) => {
+            const next = clampQuality(q, "up");
+            if (next !== q && pcRef.current) {
+              applySenderQuality(pcRef.current, next).catch(() => {});
+              lastDecisionAtRef.current = now;
+            }
+            return next;
+          });
           goodStreakRef.current = 0;
-          return;
         }
       } catch {}
-    }, 2000);
+    }, 1500);
   }
 
-  async function startShare() {
-    try {
-      stopShare();
-      setAutoQuality(quality);
-
-      const { frameRate } = qualityParams(quality);
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate, width: { ideal: 1920 }, height: { ideal: 1080 } } as any,
-        audio: false,
-      });
-
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play?.().catch(() => {});
-      }
-
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      pcRef.current = pc;
-
-      stream.getTracks().forEach((t) => pc.addTrack(t, stream));
-
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          channelRef.current?.send({
-            type: "broadcast",
-            event: "signal",
-            payload: { type: "ice", candidate: e.candidate } satisfies SignalMsg,
-          });
-        }
-      };
-
-      await applySenderQuality(pc, quality);
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      // bewaar om opnieuw te kunnen sturen als kind later pas joint
-      lastOfferRef.current = offer;
-
-      await channelRef.current?.send({
-        type: "broadcast",
-        event: "signal",
-        payload: { type: "offer", sdp: offer } satisfies SignalMsg,
-      });
-
-      setStatus("sharing");
-      startStatsLoop();
-
-      stream.getVideoTracks()[0].onended = () => stopShare();
-    } catch (e) {
-      console.error(e);
-      setStatus("error");
-      alert("Scherm delen is niet gelukt. Probeer opnieuw.");
-    }
-  }
-
-  function stopShare() {
+  async function stopShare() {
     stopStatsLoop();
-    lastOfferRef.current = null;
-
-    try {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    } catch {}
-    streamRef.current = null;
 
     try {
       pcRef.current?.close();
     } catch {}
     pcRef.current = null;
 
+    try {
+      if (channelRef.current) await supabase.removeChannel(channelRef.current);
+    } catch {}
+    channelRef.current = null;
+
+    try {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    streamRef.current = null;
+
+    if (videoRef.current) {
+      try {
+        (videoRef.current as any).srcObject = null;
+      } catch {}
+    }
+
+    lastOfferRef.current = null;
     setStatus("idle");
   }
 
-  // snapshot overlay renderer
+  async function startShare() {
+    await stopShare();
+    setStatus("sharing");
+
+    const ch = supabase.channel(`signal:${code}`);
+    channelRef.current = ch;
+
+    // create pc
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+    pcRef.current = pc;
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        ch.send({
+          type: "broadcast",
+          event: "signal",
+          payload: { type: "ice", candidate: e.candidate } satisfies SignalMsg,
+        });
+      }
+    };
+
+    try {
+      const stream = await (navigator.mediaDevices as any).getDisplayMedia({
+        video: {
+          frameRate: qualityParams(quality).frameRate,
+        },
+        audio: false,
+      });
+
+      streamRef.current = stream;
+
+      const track = stream.getVideoTracks()[0];
+      pc.addTrack(track, stream);
+
+      // show local preview
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play?.().catch(() => {});
+      }
+
+      // offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      lastOfferRef.current = offer;
+
+      await ch.send({
+        type: "broadcast",
+        event: "signal",
+        payload: { type: "offer", sdp: offer } satisfies SignalMsg,
+      });
+
+      await applySenderQuality(pc, quality);
+      setAutoQuality(quality);
+
+      ch.subscribe();
+      setStatus("sharing");
+
+      // stats auto loop
+      startStatsLoop();
+    } catch (e) {
+      console.error(e);
+      setStatus("error");
+      await stopShare();
+      alert("Scherm delen geweigerd of mislukt.");
+    }
+  }
+
+  // Snapshot overlay drawing loop (kind shapes)
   useEffect(() => {
     let raf = 0;
 
     function resizeCanvas() {
-      const c = snapshotCanvasRef.current;
       const wrap = snapshotWrapRef.current;
-      if (!c || !wrap) return;
+      const c = snapshotCanvasRef.current;
+      if (!wrap || !c) return;
+
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
       if (!w || !h) return;
@@ -419,9 +430,9 @@ export default function ShareClient({ code }: { code: string }) {
     }
 
     function loop() {
-      const c = snapshotCanvasRef.current;
       const wrap = snapshotWrapRef.current;
-      if (!c || !wrap) {
+      const c = snapshotCanvasRef.current;
+      if (!wrap || !c) {
         raf = requestAnimationFrame(loop);
         return;
       }
@@ -479,6 +490,13 @@ export default function ShareClient({ code }: { code: string }) {
     };
   }, [packets, activePacketId]);
 
+  useEffect(() => {
+    return () => {
+      stopShare();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const unseenCount = packets.filter((p) => !p.seen).length;
   const active = packets.find((p) => p.id === activePacketId) ?? null;
 
@@ -491,105 +509,76 @@ export default function ShareClient({ code }: { code: string }) {
   const kidUrl = `${origin}/kind/verbinden`;
 
   return (
-    <main className="mx-auto max-w-6xl px-3 pb-6">
-      {/* Compact header */}
-      <div className="pt-4 pb-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Scherm delen</h1>
-            <p className="text-slate-600 text-sm">
-              Code: <span className="font-mono font-semibold">{code}</span>
-              {unseenCount > 0 ? (
-                <>
-                  {" "}
-                  • <span className="font-semibold text-slate-900">{unseenCount} nieuw</span>
-                </>
-              ) : null}
-            </p>
-            <p className="text-slate-600 text-xs">
-              Kind opent: <span className="font-mono">{kidUrl}</span> • Deze pagina: <span className="font-mono">{shareUrl}</span>
-            </p>
-          </div>
+    <FullscreenShell
+      sidebarTitle="Ouder"
+      sidebar={
+        <div className="flex flex-col gap-3">
+          {/* Info */}
+          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+            <div className="text-sm text-white/60">Code</div>
+            <div className="text-lg font-mono text-white">{code}</div>
 
-          {/* Tiny controls */}
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={quality}
-              onChange={(e) => setQuality(e.target.value as Quality)}
-              className="h-10 rounded-xl border px-3 bg-white"
-              disabled={status !== "idle"}
-              title={status !== "idle" ? "Stop eerst delen om startkwaliteit te wijzigen" : ""}
-            >
-              <option value="low">{qualityLabel("low")}</option>
-              <option value="medium">{qualityLabel("medium")}</option>
-              <option value="high">{qualityLabel("high")}</option>
-            </select>
+            <div className="mt-2 text-xs text-white/60">
+              Kind opent: <span className="font-mono text-white/80">{kidUrl}</span>
+            </div>
+            <div className="text-xs text-white/60">
+              Deze pagina: <span className="font-mono text-white/80">{shareUrl}</span>
+            </div>
 
-            <label className="flex items-center gap-2 text-sm text-slate-600">
-              <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} disabled={status === "idle"} />
-              Auto
-            </label>
-
-            <Button onClick={() => setShowList((s) => !s)}>{showList ? "Verberg lijst" : "Toon lijst"}</Button>
-
-            {status === "idle" ? (
-              <Button variant="primary" onClick={startShare}>
-                Deel scherm
-              </Button>
-            ) : (
-              <Button onClick={stopShare}>Stop</Button>
-            )}
-          </div>
-        </div>
-
-        {status !== "idle" ? <div className="mt-2 text-xs text-slate-500 font-mono">{debugLine || "stats…"}</div> : null}
-      </div>
-
-      {/* Main area: viewer maximal */}
-      <div className={`grid gap-4 ${showList ? "lg:grid-cols-[1.6fr_1fr]" : "lg:grid-cols-1"}`}>
-        {/* Viewer */}
-        <Card className="p-3">
-          <div
-            className="rounded-2xl overflow-hidden bg-black"
-            style={{
-              height: "calc(100vh - 220px)",
-              minHeight: 420,
-              position: "relative",
-            }}
-          >
-            {active ? (
-              <div ref={snapshotWrapRef} className="w-full h-full" style={{ position: "relative" }}>
-                <img src={active.snapshotJpeg} alt="Snapshot" className="w-full h-full object-contain block" />
-                <canvas ref={snapshotCanvasRef} style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
-
-                {/* Compact overlay controls in viewer */}
-                <div className="absolute top-3 left-3 flex flex-wrap gap-2">
-                  <Button onClick={() => setActivePacketId(null)}>Terug naar live</Button>
-                  <Button onClick={clearAll}>Wis alles</Button>
-                </div>
+            {unseenCount > 0 ? (
+              <div className="mt-2 text-xs">
+                <span className="rounded-full bg-blue-500/20 text-blue-200 px-2 py-0.5">{unseenCount} nieuw</span>
               </div>
-            ) : (
-              <div className="w-full h-full">
-                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
-              </div>
-            )}
+            ) : null}
           </div>
-        </Card>
 
-        {/* Sidebar list (toggleable) */}
-        {showList ? (
-          <Card className="p-3">
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <h2 className="text-lg font-semibold">Aanwijzingen</h2>
-              {packets.length > 0 ? <Button onClick={clearAll}>Wis alles</Button> : null}
+          {/* Share controls */}
+          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+            <div className="text-sm text-white/60 mb-2">Delen</div>
+
+            <div className="flex flex-col gap-2">
+              <select
+                value={quality}
+                onChange={(e) => setQuality(e.target.value as Quality)}
+                className="h-10 rounded-xl border px-3 bg-white text-slate-900"
+                disabled={status !== "idle"}
+                title={status !== "idle" ? "Stop eerst delen om startkwaliteit te wijzigen" : ""}
+              >
+                <option value="low">{qualityLabel("low")}</option>
+                <option value="medium">{qualityLabel("medium")}</option>
+                <option value="high">{qualityLabel("high")}</option>
+              </select>
+
+              <label className="flex items-center gap-2 text-sm text-white/80">
+                <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} disabled={status === "idle"} />
+                Auto kwaliteit
+              </label>
+
+              {status === "idle" ? (
+                <Button variant="primary" onClick={startShare}>
+                  Deel scherm
+                </Button>
+              ) : (
+                <Button onClick={stopShare}>Stop</Button>
+              )}
+
+              {status !== "idle" ? <div className="text-xs text-white/60 font-mono">{debugLine || "stats…"}</div> : null}
+            </div>
+          </div>
+
+          {/* Aanwijzingen */}
+          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="text-sm text-white/60">Aanwijzingen</div>
+              {packets.length > 0 ? <Button onClick={clearAll}>Wis</Button> : null}
             </div>
 
             {packets.length === 0 ? (
-              <p className="text-sm text-slate-600">
+              <p className="text-sm text-white/70">
                 Nog geen aanwijzingen. Het kind tekent en klikt op <b>Delen</b>.
               </p>
             ) : (
-              <div className="space-y-3" style={{ maxHeight: "calc(100vh - 320px)", overflow: "auto" }}>
+              <div className="space-y-2" style={{ maxHeight: "55vh", overflow: "auto" }}>
                 {packets
                   .slice()
                   .reverse()
@@ -600,30 +589,50 @@ export default function ShareClient({ code }: { code: string }) {
                         setActivePacketId(p.id);
                         setPackets((prev) => prev.map((x) => (x.id === p.id ? { ...x, seen: true } : x)));
                       }}
-                      className={`w-full text-left rounded-xl border p-3 transition ${
-                        activePacketId === p.id ? "border-slate-900" : "border-slate-200 hover:border-slate-400"
+                      className={`w-full text-left rounded-xl border p-2 transition ${
+                        activePacketId === p.id ? "border-white/60" : "border-white/10 hover:border-white/30"
                       }`}
                     >
-                      <div className="flex gap-3">
-                        <img src={p.snapshotJpeg} alt="Snapshot" className="h-20 w-32 object-cover rounded-lg border" />
+                      <div className="flex gap-2">
+                        <img src={p.snapshotJpeg} alt="Snapshot" className="h-14 w-24 object-cover rounded-lg border border-white/10" />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
-                            <div className="text-sm font-semibold truncate">Aanwijzing</div>
+                            <div className="text-sm font-semibold text-white truncate">Aanwijzing</div>
                             {!p.seen ? (
-                              <span className="text-xs rounded-full bg-blue-100 text-blue-900 px-2 py-0.5">nieuw</span>
+                              <span className="text-xs rounded-full bg-blue-500/20 text-blue-200 px-2 py-0.5">nieuw</span>
                             ) : null}
                           </div>
-                          <div className="text-xs text-slate-600 mt-1">{new Date(p.createdAt).toLocaleString()}</div>
-                          <div className="text-xs text-slate-600 mt-1">Markeringen: {p.shapes.length}</div>
+                          <div className="text-xs text-white/60 mt-0.5">{new Date(p.createdAt).toLocaleString()}</div>
+                          <div className="text-xs text-white/60 mt-0.5">Markeringen: {p.shapes.length}</div>
                         </div>
                       </div>
                     </button>
                   ))}
               </div>
             )}
-          </Card>
-        ) : null}
-      </div>
-    </main>
+          </div>
+        </div>
+      }
+    >
+      <ViewerStage>
+        {/* viewer rechts fullscreen */}
+        <div className="absolute inset-0">
+          {active ? (
+            <div ref={snapshotWrapRef} className="absolute inset-0" style={{ position: "relative" }}>
+              <img src={active.snapshotJpeg} alt="Snapshot" className="w-full h-full object-contain block" />
+              <canvas ref={snapshotCanvasRef} className="absolute inset-0" style={{ pointerEvents: "none" }} />
+
+              {/* kleine overlay controls */}
+              <div className="absolute top-3 left-3 flex flex-wrap gap-2">
+                <Button onClick={() => setActivePacketId(null)}>Terug naar live</Button>
+                <Button onClick={clearAll}>Wis alles</Button>
+              </div>
+            </div>
+          ) : (
+            <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
+          )}
+        </div>
+      </ViewerStage>
+    </FullscreenShell>
   );
 }

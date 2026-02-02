@@ -1,8 +1,11 @@
 "use client";
 
 import { useMemo, useRef, useState, useEffect } from "react";
-import { Card, Button, Input } from "@/components/ui";
+import { Button, Input } from "@/components/ui";
 import { supabaseBrowser } from "@/lib/supabase/browser";
+
+import FullscreenShell from "@/components/meekijk/FullscreenShell";
+import ViewerStage from "@/components/meekijk/ViewerStage";
 
 type Quality = "low" | "medium" | "high";
 type DrawTool = "circle" | "rect" | "arrow";
@@ -491,129 +494,99 @@ export default function KindVerbinden() {
   const canConnect = raw.length === 6;
 
   return (
-    <main className="mx-auto max-w-4xl px-3 pb-6">
-      {/* Compact header */}
-      <div className="pt-4 pb-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Meekijken</h1>
-            <p className="text-slate-600 text-sm">Kind-kant (viewer)</p>
-          </div>
-          <div className="text-sm text-slate-600">
-            Status: <span className="font-mono">{status}</span>
-            {remoteQuality ? (
-              <>
-                {" "}
-                • Kwaliteit: <span className="font-mono">{remoteQuality}</span>
-              </>
-            ) : null}
-          </div>
-        </div>
-      </div>
-
-      {/* Connect panel: compact en verdwijnt niet, maar is klein */}
-      <Card className="p-3 mb-3">
-        <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
-          <Input value={code} onChange={(e) => setCode(formatCode(e.target.value))} placeholder="123 456" inputMode="numeric" />
-          {!connected ? (
-            <Button variant="primary" onClick={connect} disabled={!canConnect || status === "connecting"} className="sm:w-40">
-              {status === "connecting" ? "Verbinden…" : "Verbind"}
-            </Button>
-          ) : (
-            <Button onClick={disconnect} className="sm:w-40">
-              Stop
-            </Button>
-          )}
-        </div>
-      </Card>
-
-      {/* VIDEO: zo groot mogelijk */}
-      <div
-        className="rounded-2xl overflow-hidden bg-black"
-        style={{
-          // zo groot mogelijk, maar ruimte voor toolbar onderin
-          height: "calc(100vh - 210px)",
-          minHeight: 360,
-          position: "relative",
-        }}
-      >
-        <div
-          ref={viewportRef}
-          className="w-full h-full"
-          style={{
-            position: "relative",
-            touchAction: "none",
-            cursor: annotate ? "crosshair" : zoom > 1 ? (panDragRef.current.dragging ? "grabbing" : "grab") : "default",
-          }}
-          onPointerDown={onViewportPointerDown}
-          onPointerMove={onViewportPointerMove}
-          onPointerUp={onViewportPointerUp}
-          onPointerCancel={onViewportPointerUp}
-          onPointerLeave={onViewportPointerUp}
-        >
-          <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "top left", width: "100%" }}>
-            <video ref={videoRef} autoPlay playsInline className="w-full h-full object-contain" />
-          </div>
-
-          <canvas
-            ref={canvasRef}
-            style={{ position: "absolute", inset: 0, pointerEvents: annotate ? "auto" : "none" }}
-            onPointerDown={onCanvasPointerDown}
-            onPointerMove={onCanvasPointerMove}
-            onPointerUp={onCanvasPointerUp}
-            onPointerCancel={onCanvasPointerUp}
-            onPointerLeave={onCanvasPointerUp}
-          />
-
-          {/* Fullscreen hint */}
-          {isFullscreen ? (
-            <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2">
-              Fullscreen — druk <b>ESC</b> om terug te gaan
+    <FullscreenShell
+      sidebarTitle="Kind"
+      sidebar={
+        <div className="flex flex-col gap-3">
+          {/* Status */}
+          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+            <div className="text-sm text-white/60">Status</div>
+            <div className="text-sm text-white">
+              <span className="text-white/70">verbinding:</span> <span className="font-mono">{status}</span>
+              {remoteQuality ? (
+                <>
+                  <span className="text-white/50"> • </span>
+                  <span className="text-white/70">kwaliteit ouder:</span> <span className="font-mono">{remoteQuality}</span>
+                </>
+              ) : null}
             </div>
-          ) : null}
-        </div>
+          </div>
 
-        {/* Slimme, compacte toolbar: onderin over het beeld */}
-        <div className="absolute left-3 right-3 bottom-3">
-          <div className="rounded-2xl bg-white/95 backdrop-blur border shadow-sm p-2">
-            <div className="flex flex-wrap items-center gap-2 justify-between">
-              <div className="flex items-center gap-2">
-                <Button onClick={zoomOut} disabled={zoom <= 1} title="Zoom uit">
-                  −
+          {/* Connect */}
+          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+            <div className="text-sm text-white/60 mb-2">Koppelcode</div>
+            <div className="flex flex-col gap-2">
+              <Input value={code} onChange={(e) => setCode(formatCode(e.target.value))} placeholder="123 456" inputMode="numeric" />
+              {!connected ? (
+                <Button variant="primary" onClick={connect} disabled={!canConnect || status === "connecting"}>
+                  {status === "connecting" ? "Verbinden…" : "Verbind"}
                 </Button>
-                <input
-                  type="range"
-                  min={1}
-                  max={3}
-                  step={0.25}
-                  value={zoom}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    setZoom(v);
-                    if (v === 1) setPan({ x: 0, y: 0 });
-                  }}
-                  style={{ width: 140 }}
-                />
-                <Button onClick={zoomIn} disabled={zoom >= 3} title="Zoom in">
-                  +
-                </Button>
-                <div className="text-sm text-slate-600 w-14 text-right">{Math.round(zoom * 100)}%</div>
-                <Button onClick={resetView}>Reset</Button>
-                <Button onClick={fullscreen}>Fullscreen</Button>
+              ) : (
+                <Button onClick={disconnect}>Stop</Button>
+              )}
+            </div>
+          </div>
+
+          {/* Beeld */}
+          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+            <div className="text-sm text-white/60 mb-2">Beeld</div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={zoomOut} disabled={zoom <= 1} title="Zoom uit">
+                −
+              </Button>
+              <Button onClick={zoomIn} disabled={zoom >= 3} title="Zoom in">
+                +
+              </Button>
+              <Button onClick={resetView}>Reset</Button>
+              <Button onClick={fullscreen}>Fullscreen</Button>
+            </div>
+
+            <div className="mt-2">
+              <input
+                type="range"
+                min={1}
+                max={3}
+                step={0.25}
+                value={zoom}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setZoom(v);
+                  if (v === 1) setPan({ x: 0, y: 0 });
+                }}
+                className="w-full"
+              />
+              <div className="text-xs text-white/60 mt-1">
+                Zoom: <span className="font-mono text-white/80">{Math.round(zoom * 100)}%</span>
               </div>
+              <div className="text-xs text-white/60">
+                Pan: <span className="font-mono text-white/80">{Math.round(pan.x)},{Math.round(pan.y)}</span>
+              </div>
+            </div>
+          </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" checked={annotate} onChange={(e) => setAnnotate(e.target.checked)} disabled={!connected} />
-                  Aantekeningen
-                </label>
+          {/* Aantekeningen */}
+          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+            <div className="text-sm text-white/60 mb-2">Aantekeningen</div>
 
-                <select value={tool} onChange={(e) => setTool(e.target.value as DrawTool)} className="h-10 rounded-xl border px-3 bg-white" disabled={!annotate}>
-                  <option value="circle">Cirkel</option>
-                  <option value="rect">Kader</option>
-                  <option value="arrow">Pijl</option>
-                </select>
+            <label className="flex items-center gap-2 text-sm text-white/80">
+              <input type="checkbox" checked={annotate} onChange={(e) => setAnnotate(e.target.checked)} disabled={!connected} />
+              Aan
+            </label>
 
+            <div className="mt-2 flex flex-col gap-2">
+              <select
+                value={tool}
+                onChange={(e) => setTool(e.target.value as DrawTool)}
+                className="h-10 rounded-xl border px-3 bg-white text-slate-900"
+                disabled={!annotate}
+              >
+                <option value="circle">Cirkel</option>
+                <option value="rect">Kader</option>
+                <option value="arrow">Pijl</option>
+              </select>
+
+              <div className="flex flex-wrap gap-2">
                 <Button onClick={() => setDraft((d) => d.slice(0, -1))} disabled={!annotate || draft.length === 0} title="Undo">
                   Undo
                 </Button>
@@ -624,16 +597,63 @@ export default function KindVerbinden() {
                   Delen
                 </Button>
               </div>
-            </div>
 
-            {annotate ? (
-              <div className="mt-2 text-xs text-slate-600">
-                Teken → pas aan → klik <b>Delen</b>. Ouder ziet het als screenshot met overlay.
-              </div>
-            ) : null}
+              {annotate ? (
+                <div className="text-xs text-white/60">
+                  Teken → klik <b>Delen</b>. Ouder ziet screenshot + overlay.
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
-      </div>
-    </main>
+      }
+    >
+      <ViewerStage>
+        {/* fullscreen stage */}
+        <div
+          ref={viewportRef}
+          className="absolute inset-0"
+          style={{
+            touchAction: "none",
+            cursor: annotate ? "crosshair" : zoom > 1 ? (panDragRef.current.dragging ? "grabbing" : "grab") : "default",
+          }}
+          onPointerDown={onViewportPointerDown}
+          onPointerMove={onViewportPointerMove}
+          onPointerUp={onViewportPointerUp}
+          onPointerCancel={onViewportPointerUp}
+          onPointerLeave={onViewportPointerUp}
+        >
+          {/* video layer (pan/zoom) */}
+          <div
+            className="absolute inset-0"
+            style={{
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transformOrigin: "top left",
+            }}
+          >
+            <video ref={videoRef} autoPlay playsInline className="w-full h-full object-contain" />
+          </div>
+
+          {/* overlay canvas */}
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0"
+            style={{ pointerEvents: annotate ? "auto" : "none" }}
+            onPointerDown={onCanvasPointerDown}
+            onPointerMove={onCanvasPointerMove}
+            onPointerUp={onCanvasPointerUp}
+            onPointerCancel={onCanvasPointerUp}
+            onPointerLeave={onCanvasPointerUp}
+          />
+
+          {/* hint */}
+          {isFullscreen ? (
+            <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2">
+              Fullscreen — druk <b>ESC</b> om terug te gaan
+            </div>
+          ) : null}
+        </div>
+      </ViewerStage>
+    </FullscreenShell>
   );
 }
