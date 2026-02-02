@@ -1,11 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useState } from "react";
 import { Card, Button, Input, Textarea } from "@/components/ui";
-import { supabaseBrowser } from "@/lib/supabase/browser";
 
 export default function OuderStart() {
-  const supabase = useMemo(() => supabaseBrowser(), []);
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
   const [created, setCreated] = useState<{ code: string; url: string } | null>(null);
@@ -37,19 +36,46 @@ export default function OuderStart() {
         </p>
       </header>
 
+      {/* ✅ Nieuw: snelkoppelingen naar koppelen/gekoppeld */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Card>
+          <h2 className="text-lg font-semibold">Koppel een kind</h2>
+          <p className="mt-1 text-slate-600">Maak een koppelcode en verbind accounts.</p>
+          <div className="mt-4">
+            <Link href="/ouder/koppelen">
+              <Button className="w-full">Naar koppelen</Button>
+            </Link>
+          </div>
+        </Card>
+
+        <Card>
+          <h2 className="text-lg font-semibold">Gekoppelde kinderen</h2>
+          <p className="mt-1 text-slate-600">Bekijk met welke kinderen je gekoppeld bent.</p>
+          <div className="mt-4">
+            <Link href="/ouder/gekoppeld">
+              <Button className="w-full">Bekijk koppelingen</Button>
+            </Link>
+          </div>
+        </Card>
+      </div>
+
       {!created ? (
         <Card>
           <div className="space-y-3">
             <div>
               <label className="block text-sm font-medium text-slate-700">Naam (optioneel)</label>
               <div className="mt-1">
-                <Input value={name} onChange={(e)=>setName(e.target.value)} placeholder="Bijv. Jan" />
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Bijv. Jan" />
               </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700">Korte vraag (optioneel)</label>
               <div className="mt-1">
-                <Textarea value={note} onChange={(e)=>setNote(e.target.value)} placeholder="Bijv. Ik moet inloggen met DigiD" />
+                <Textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Bijv. Ik moet inloggen met DigiD"
+                />
               </div>
             </div>
             <Button variant="primary" className="w-full" onClick={start} disabled={loading}>
@@ -64,19 +90,20 @@ export default function OuderStart() {
             <p className="mt-1 text-slate-600">Je kind gebruikt deze code om met je mee te kijken.</p>
             <div className="mt-4 rounded-2xl bg-slate-50 border p-4 text-center">
               <div className="text-4xl font-mono tracking-widest">
-                {created.code.slice(0,3)} {created.code.slice(3)}
+                {created.code.slice(0, 3)} {created.code.slice(3)}
               </div>
             </div>
 
             <div className="mt-4 grid gap-2 sm:grid-cols-2">
-              <a className="h-12 rounded-xl border bg-white hover:bg-slate-50 flex items-center justify-center font-medium"
-                 href={`https://wa.me/?text=${waText}`} target="_blank">
+              <a
+                className="h-12 rounded-xl border bg-white hover:bg-slate-50 flex items-center justify-center font-medium"
+                href={`https://wa.me/?text=${waText}`}
+                target="_blank"
+                rel="noreferrer"
+              >
                 Stuur via WhatsApp
               </a>
-              <Button
-                onClick={() => navigator.clipboard.writeText(created.url)}
-                className="w-full"
-              >
+              <Button onClick={() => navigator.clipboard.writeText(created.url)} className="w-full">
                 Kopieer link
               </Button>
             </div>
