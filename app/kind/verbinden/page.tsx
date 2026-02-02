@@ -59,6 +59,9 @@ export default function KindVerbinden() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const channelRef = useRef<any>(null);
 
+  // ✅ autoplay fallback state
+  const [needsTapToPlay, setNeedsTapToPlay] = useState(false);
+
   // Zoom + pan
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -78,7 +81,7 @@ export default function KindVerbinden() {
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
-  // Draft annotations (local until "Delen")
+  // Draft annotations
   const [annotate, setAnnotate] = useState(false);
   const [tool, setTool] = useState<DrawTool>("circle");
   const [draft, setDraft] = useState<DraftShape[]>([]);
@@ -131,6 +134,7 @@ export default function KindVerbinden() {
       } catch {}
     }
 
+    setNeedsTapToPlay(false);
     setConnected(false);
     setStatus("idle");
     setRemoteQuality(null);
@@ -158,12 +162,39 @@ export default function KindVerbinden() {
     });
     pcRef.current = pc;
 
+    // ✅ Track handler
     pc.ontrack = (ev) => {
       const [stream] = ev.streams;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play?.().catch(() => {});
-      }
+      if (!stream) return;
+
+      const v = videoRef.current;
+      if (!v) return;
+
+      setNeedsTapToPlay(false);
+
+      v.srcObject = stream;
+
+      // ✅ extra zekerheid: autoplay toestaan
+      v.muted = true; // belangrijk voor Safari autoplay
+      v.playsInline = true;
+
+      const tryPlay = async () => {
+        try {
+          await v.play();
+          setNeedsTapToPlay(false);
+        } catch {
+          // autoplay geblokkeerd → toon knop
+          setNeedsTapToPlay(true);
+        }
+      };
+
+      // meteen proberen
+      tryPlay();
+
+      // en nog eens zodra metadata er is
+      v.onloadedmetadata = () => {
+        tryPlay();
+      };
     };
 
     pc.onicecandidate = (e) => {
@@ -206,7 +237,7 @@ export default function KindVerbinden() {
       }
     });
 
-    // Subscribe + HELLO handshake (fix: ouder kan al gestart zijn)
+    // ✅ HELLO handshake (ouder kan al gestart zijn)
     ch.subscribe((st: string) => {
       if (st === "SUBSCRIBED") {
         ch.send({
@@ -222,7 +253,6 @@ export default function KindVerbinden() {
     await cleanup();
   }
 
-  // Zoom helpers
   function zoomOut() {
     setZoom((z) => {
       const next = Math.max(1, +(z - 0.25).toFixed(2));
@@ -493,12 +523,25 @@ export default function KindVerbinden() {
   const raw = code.replace(/\D/g, "");
   const canConnect = raw.length === 6;
 
+  async function tapToPlay() {
+    const v = videoRef.current;
+    if (!v) return;
+    try {
+      v.muted = true;
+      await v.play();
+      setNeedsTapToPlay(false);
+    } catch {
+      // blijft geblokkeerd
+      setNeedsTapToPlay(true);
+    }
+  }
+
   return (
     <FullscreenShell
       sidebarTitle="Kind"
+      sidebarSubtitle="Controls"
       sidebar={
         <div className="flex flex-col gap-3">
-          {/* Status */}
           <div className="rounded-xl bg-white/5 border border-white/10 p-3">
             <div className="text-sm text-white/60">Status</div>
             <div className="text-sm text-white">
@@ -512,11 +555,16 @@ export default function KindVerbinden() {
             </div>
           </div>
 
-          {/* Connect */}
           <div className="rounded-xl bg-white/5 border border-white/10 p-3">
             <div className="text-sm text-white/60 mb-2">Koppelcode</div>
             <div className="flex flex-col gap-2">
-              <Input value={code} onChange={(e) => setCode(formatCode(e.target.value))} placeholder="123 456" inputMode="numeric" />
+              <Input
+                className="bg-white text-slate-900 placeholder:text-slate-400"
+                value={code}
+                onChange={(e) => setCode(formatCode(e.target.value))}
+                placeholder="123 456"
+                inputMode="numeric"
+              />
               {!connected ? (
                 <Button variant="primary" onClick={connect} disabled={!canConnect || status === "connecting"}>
                   {status === "connecting" ? "Verbinden…" : "Verbind"}
@@ -527,7 +575,6 @@ export default function KindVerbinden() {
             </div>
           </div>
 
-          {/* Beeld */}
           <div className="rounded-xl bg-white/5 border border-white/10 p-3">
             <div className="text-sm text-white/60 mb-2">Beeld</div>
 
@@ -565,7 +612,6 @@ export default function KindVerbinden() {
             </div>
           </div>
 
-          {/* Aantekeningen */}
           <div className="rounded-xl bg-white/5 border border-white/10 p-3">
             <div className="text-sm text-white/60 mb-2">Aantekeningen</div>
 
@@ -597,19 +643,12 @@ export default function KindVerbinden() {
                   Delen
                 </Button>
               </div>
-
-              {annotate ? (
-                <div className="text-xs text-white/60">
-                  Teken → klik <b>Delen</b>. Ouder ziet screenshot + overlay.
-                </div>
-              ) : null}
             </div>
           </div>
         </div>
       }
     >
       <ViewerStage>
-        {/* fullscreen stage */}
         <div
           ref={viewportRef}
           className="absolute inset-0"
@@ -623,7 +662,6 @@ export default function KindVerbinden() {
           onPointerCancel={onViewportPointerUp}
           onPointerLeave={onViewportPointerUp}
         >
-          {/* video layer (pan/zoom) */}
           <div
             className="absolute inset-0"
             style={{
@@ -631,10 +669,15 @@ export default function KindVerbinden() {
               transformOrigin: "top left",
             }}
           >
-            <video ref={videoRef} autoPlay playsInline className="w-full h-full object-contain" />
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full h-full object-contain"
+            />
           </div>
 
-          {/* overlay canvas */}
           <canvas
             ref={canvasRef}
             className="absolute inset-0"
@@ -646,7 +689,20 @@ export default function KindVerbinden() {
             onPointerLeave={onCanvasPointerUp}
           />
 
-          {/* hint */}
+          {needsTapToPlay ? (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="rounded-2xl bg-black/70 border border-white/15 text-white px-4 py-3 text-sm">
+                <div className="font-semibold mb-1">Klik om beeld te starten</div>
+                <div className="text-white/70 mb-3">
+                  Je browser blokkeert autoplay. Klik hieronder om de stream te starten.
+                </div>
+                <Button variant="primary" onClick={tapToPlay}>
+                  Start beeld
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           {isFullscreen ? (
             <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2">
               Fullscreen — druk <b>ESC</b> om terug te gaan
