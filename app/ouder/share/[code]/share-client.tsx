@@ -7,7 +7,8 @@ import { supabaseBrowser } from "@/lib/supabase/browser";
 type SignalMsg =
   | { type: "offer"; sdp: any }
   | { type: "answer"; sdp: any }
-  | { type: "ice"; candidate: any };
+  | { type: "ice"; candidate: any }
+  | { type: "quality"; quality: Quality };
 
 type Quality = "low" | "medium" | "high";
 
@@ -18,7 +19,6 @@ function qualityLabel(q: Quality) {
 }
 
 function qualityParams(q: Quality) {
-  // Richtwaarden voor desktop text sharing
   if (q === "low") return { maxBitrate: 900_000, maxFramerate: 12, frameRate: 12 };
   if (q === "medium") return { maxBitrate: 2_000_000, maxFramerate: 15, frameRate: 15 };
   return { maxBitrate: 3_500_000, maxFramerate: 20, frameRate: 20 };
@@ -40,12 +40,9 @@ export default function ShareClient({ code }: { code: string }) {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [status, setStatus] = useState<"idle" | "sharing" | "connected" | "error">("idle");
 
-  // Manual selector bepaalt de startkwaliteit; tijdens delen kan auto-detect hem aanpassen.
   const [quality, setQuality] = useState<Quality>("medium");
-
   const [auto, setAuto] = useState(true);
   const [autoQuality, setAutoQuality] = useState<Quality>("medium");
-
   const [debugLine, setDebugLine] = useState<string>("");
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -64,6 +61,17 @@ export default function ShareClient({ code }: { code: string }) {
     typeof window !== "undefined" && window.location?.origin
       ? window.location.origin
       : "https://kijkevenmee-app.vercel.app";
+
+  // helper: broadcast quality naar kind
+  async function broadcastQuality(q: Quality) {
+    try {
+      await channelRef.current?.send({
+        type: "broadcast",
+        event: "signal",
+        payload: { type: "quality", quality: q } satisfies SignalMsg,
+      });
+    } catch {}
+  }
 
   useEffect(() => {
     const ch = supabase.channel(`signal:${code}`);
@@ -106,6 +114,9 @@ export default function ShareClient({ code }: { code: string }) {
     params.encodings[0].maxFramerate = maxFramerate;
 
     await videoSender.setParameters(params);
+
+    // ✅ Kind informeren
+    await broadcastQuality(q);
   }
 
   function stopStatsLoop() {
@@ -130,12 +141,9 @@ export default function ShareClient({ code }: { code: string }) {
 
         const stats = await pc.getStats();
 
-        // We zoeken outbound video stats
         let bytesSent: number | null = null;
         let packetsSent: number | null = null;
         let packetsLost: number | null = null;
-
-        // RTT (candidate-pair, als beschikbaar)
         let rttMs: number | null = null;
 
         stats.forEach((r: any) => {
@@ -153,7 +161,6 @@ export default function ShareClient({ code }: { code: string }) {
 
         const now = Date.now();
 
-        // bitrate berekenen op basis van bytesSent delta
         let bitrateBps: number | null = null;
         if (bytesSent != null && lastBytesSentRef.current != null && lastStatsAtRef.current != null) {
           const dt = (now - lastStatsAtRef.current) / 1000;
@@ -166,34 +173,24 @@ export default function ShareClient({ code }: { code: string }) {
         if (bytesSent != null) lastBytesSentRef.current = bytesSent;
         lastStatsAtRef.current = now;
 
-        // loss ratio (ruw): packetsLost / (packetsSent + packetsLost)
         let lossPct: number | null = null;
         if (packetsLost != null && packetsSent != null && packetsSent + packetsLost > 0) {
-          lossPct = Math.round((packetsLost / (packetsSent + packetsLost)) * 1000) / 10; // 0.1%
+          lossPct = Math.round((packetsLost / (packetsSent + packetsLost)) * 1000) / 10;
         }
 
-        // Debug regel (handig om te zien wat er gebeurt)
         const kbps = bitrateBps != null ? Math.round(bitrateBps / 1000) : null;
-        setDebugLine(
-          `auto=${autoQuality} • bitrate=${kbps ?? "?"}kbps • loss=${lossPct ?? "?"}% • rtt=${rttMs ?? "?"}ms`
-        );
+        setDebugLine(`auto=${autoQuality} • bitrate=${kbps ?? "?"}kbps • loss=${lossPct ?? "?"}% • rtt=${rttMs ?? "?"}ms`);
 
-        // --- Auto decision logic ---
-        // cooldown om flappen te voorkomen
         const COOLDOWN_MS = 8000;
         if (now - lastDecisionAtRef.current < COOLDOWN_MS) return;
 
         const { maxBitrate } = qualityParams(autoQuality);
 
-        // Define "bad" if:
-        // - loss >= 3%  OR RTT >= 450ms OR bitrate significantly below target (bijv. < 55% van maxBitrate)
         const bad =
           (lossPct != null && lossPct >= 3) ||
           (rttMs != null && rttMs >= 450) ||
           (bitrateBps != null && bitrateBps < maxBitrate * 0.55);
 
-        // Define "good" if:
-        // - loss <= 1% AND RTT <= 250ms AND bitrate close to target (> 80% of target)
         const good =
           (lossPct == null || lossPct <= 1) &&
           (rttMs == null || rttMs <= 250) &&
@@ -206,12 +203,10 @@ export default function ShareClient({ code }: { code: string }) {
           goodStreakRef.current += 1;
           badStreakRef.current = 0;
         } else {
-          // neutraal: streaks langzaam laten teruglopen
           badStreakRef.current = Math.max(0, badStreakRef.current - 1);
           goodStreakRef.current = Math.max(0, goodStreakRef.current - 1);
         }
 
-        // Downshift sneller dan upshift (stabiliteit)
         if (badStreakRef.current >= 2) {
           const next = clampQuality(autoQuality, "down");
           if (next !== autoQuality && pcRef.current) {
@@ -233,10 +228,7 @@ export default function ShareClient({ code }: { code: string }) {
           goodStreakRef.current = 0;
           return;
         }
-      } catch (e) {
-        // stats errors niet fataal maken
-        // console.debug(e);
-      }
+      } catch {}
     }, 2000);
   }
 
@@ -244,7 +236,6 @@ export default function ShareClient({ code }: { code: string }) {
     try {
       stopShare();
 
-      // Startkwaliteit = manual selector, maar autoQuality start daar ook mee
       setAutoQuality(quality);
 
       const { frameRate } = qualityParams(quality);
@@ -281,10 +272,9 @@ export default function ShareClient({ code }: { code: string }) {
         }
       };
 
-      // Pas startkwaliteit toe (bitrate/framerate)
+      // startkwaliteit + meteen naar kind sturen
       await applySenderQuality(pc, quality);
 
-      // Offer -> kind
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
@@ -401,9 +391,7 @@ export default function ShareClient({ code }: { code: string }) {
         </div>
 
         {status !== "idle" ? (
-          <div className="text-xs text-slate-500 font-mono">
-            {debugLine || "stats…"}
-          </div>
+          <div className="text-xs text-slate-500 font-mono">{debugLine || "stats…"}</div>
         ) : null}
       </Card>
     </main>
