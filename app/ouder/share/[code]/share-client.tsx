@@ -43,62 +43,111 @@ function qualityParams(q: Quality) {
   return { maxBitrate: 3_500_000, maxFramerate: 20, frameRate: 20 };
 }
 
-function clampQuality(q: Quality, dir: "down" | "up"): Quality {
-  if (dir === "down") {
-    if (q === "high") return "medium";
-    if (q === "medium") return "low";
-    return "low";
-  } else {
-    if (q === "low") return "medium";
-    if (q === "medium") return "high";
-    return "high";
-  }
-}
-
 export default function ShareClient({ code }: { code: string }) {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [status, setStatus] = useState<"idle" | "sharing" | "connected" | "error">("idle");
 
   const [quality, setQuality] = useState<Quality>("medium");
   const [auto, setAuto] = useState(true);
-  const [autoQuality, setAutoQuality] = useState<Quality>("medium");
-  const [debugLine, setDebugLine] = useState<string>("");
-
-  const [showSelfShareHint, setShowSelfShareHint] = useState(false);
+  const [debugLine, setDebugLine] = useState("");
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
   const pcRef = useRef<RTCPeerConnection | null>(null);
+
+  // ✅ 1 kanaal voor alles (signaling + packets)
   const channelRef = useRef<any>(null);
 
+  // ✅ Als kind later joint: offer opnieuw kunnen sturen
   const lastOfferRef = useRef<any>(null);
 
   const statsTimerRef = useRef<any>(null);
-  const lastDecisionAtRef = useRef<number>(0);
-  const goodStreakRef = useRef<number>(0);
-  const badStreakRef = useRef<number>(0);
   const lastBytesSentRef = useRef<number | null>(null);
   const lastStatsAtRef = useRef<number | null>(null);
 
+  // packets van kind
   const [packets, setPackets] = useState<PacketState[]>([]);
   const [activePacketId, setActivePacketId] = useState<string | null>(null);
 
+  // Snapshot viewer refs
   const snapshotWrapRef = useRef<HTMLDivElement | null>(null);
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const origin =
     typeof window !== "undefined" && window.location?.origin ? window.location.origin : "https://kijkevenmee-app.vercel.app";
 
+  // ✅ Capture Handle config (Chromium) zodat we kunnen herkennen of iemand DEZE tab probeert te delen
   useEffect(() => {
-    const onVis = () => {
-      if (document.visibilityState === "visible") {
-        setPackets((prev) => prev.map((p) => ({ ...p, seen: true })));
-      }
-    };
-    document.addEventListener("visibilitychange", onVis);
-    onVis();
-    return () => document.removeEventListener("visibilitychange", onVis);
+    try {
+      // @ts-ignore
+      navigator.mediaDevices?.setCaptureHandleConfig?.({
+        exposeOrigin: true,
+        // uniek label voor deze app
+        handle: "kijkevenmee-parent",
+        permittedOrigins: ["*"],
+      });
+    } catch {}
   }, []);
+
+  // ✅ Maak channel 1x en blijf daarop luisteren (ook wanneer idle)
+  useEffect(() => {
+    const ch = supabase.channel(`signal:${code}`);
+    channelRef.current = ch;
+
+    ch.on("broadcast", { event: "signal" }, async (payload: any) => {
+      const msg = payload.payload as SignalMsg;
+
+      try {
+        if (msg.type === "hello") {
+          // kind is net binnengekomen → resend offer als ouder al aan het delen is
+          if (lastOfferRef.current) {
+            await ch.send({
+              type: "broadcast",
+              event: "signal",
+              payload: { type: "offer", sdp: lastOfferRef.current } satisfies SignalMsg,
+            });
+          }
+          return;
+        }
+
+        if (msg.type === "draw_packet") {
+          const packet = msg.packet;
+          setPackets((prev) => [
+            ...prev,
+            { ...packet, seen: document.visibilityState === "visible" },
+          ]);
+          setActivePacketId(packet.id);
+          return;
+        }
+
+        const pc = pcRef.current;
+        if (!pc) return;
+
+        if (msg.type === "answer") {
+          await pc.setRemoteDescription(msg.sdp);
+          setStatus("connected");
+          return;
+        }
+
+        if (msg.type === "ice") {
+          await pc.addIceCandidate(msg.candidate);
+          return;
+        }
+      } catch (e) {
+        console.error(e);
+        setStatus("error");
+      }
+    });
+
+    ch.subscribe();
+
+    return () => {
+      try {
+        supabase.removeChannel(ch);
+      } catch {}
+    };
+  }, [supabase, code]);
 
   async function broadcastQuality(q: Quality) {
     try {
@@ -110,78 +159,17 @@ export default function ShareClient({ code }: { code: string }) {
     } catch {}
   }
 
-  async function sendOfferAgainIfWeHaveOne() {
-    const ch = channelRef.current;
-    const offer = lastOfferRef.current;
-    if (!ch || !offer) return;
-    try {
-      await ch.send({
-        type: "broadcast",
-        event: "signal",
-        payload: { type: "offer", sdp: offer } satisfies SignalMsg,
-      });
-    } catch {}
-  }
-
-  useEffect(() => {
-    const ch = supabase.channel(`signal:${code}`);
-    channelRef.current = ch;
-
-    ch.on("broadcast", { event: "signal" }, async (payload: any) => {
-      const msg = payload.payload as SignalMsg;
-
-      try {
-        if (msg.type === "hello") {
-          await sendOfferAgainIfWeHaveOne();
-          return;
-        }
-
-        if (msg.type === "draw_packet") {
-          const packet = msg.packet;
-          setPackets((prev) => [
-            ...prev,
-            {
-              ...packet,
-              seen: document.visibilityState === "visible",
-            },
-          ]);
-          setActivePacketId(packet.id);
-          return;
-        }
-
-        if (!pcRef.current) return;
-
-        if (msg.type === "answer") {
-          await pcRef.current.setRemoteDescription(msg.sdp);
-          setStatus("connected");
-        } else if (msg.type === "ice") {
-          await pcRef.current.addIceCandidate(msg.candidate);
-        }
-      } catch (e) {
-        console.error(e);
-        setStatus("error");
-      }
-    }).subscribe();
-
-    return () => {
-      try {
-        supabase.removeChannel(ch);
-      } catch {}
-    };
-  }, [supabase, code]);
-
   async function applySenderQuality(pc: RTCPeerConnection, q: Quality) {
     const { maxBitrate, maxFramerate } = qualityParams(q);
+    const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+    if (!sender) return;
 
-    const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
-    if (!videoSender) return;
-
-    const params = videoSender.getParameters();
+    const params = sender.getParameters();
     params.encodings = params.encodings || [{}];
     params.encodings[0].maxBitrate = maxBitrate;
     params.encodings[0].maxFramerate = maxFramerate;
 
-    await videoSender.setParameters(params);
+    await sender.setParameters(params);
     await broadcastQuality(q);
   }
 
@@ -192,42 +180,28 @@ export default function ShareClient({ code }: { code: string }) {
     }
     lastBytesSentRef.current = null;
     lastStatsAtRef.current = null;
-    goodStreakRef.current = 0;
-    badStreakRef.current = 0;
     setDebugLine("");
   }
 
   function startStatsLoop() {
     stopStatsLoop();
-
     statsTimerRef.current = setInterval(async () => {
       try {
         const pc = pcRef.current;
         if (!pc || !auto) return;
 
         const stats = await pc.getStats();
-
         let bytesSent: number | null = null;
-        let packetsSent: number | null = null;
-        let packetsLost: number | null = null;
-        let rttMs: number | null = null;
 
         stats.forEach((r: any) => {
           if (r.type === "outbound-rtp" && r.kind === "video") {
-            bytesSent = typeof r.bytesSent === "number" ? r.bytesSent : bytesSent;
-            packetsSent = typeof r.packetsSent === "number" ? r.packetsSent : packetsSent;
-          }
-          if (r.type === "remote-inbound-rtp" && r.kind === "video") {
-            packetsLost = typeof r.packetsLost === "number" ? r.packetsLost : packetsLost;
-          }
-          if (r.type === "candidate-pair" && r.state === "succeeded" && r.currentRoundTripTime != null) {
-            rttMs = Math.round(r.currentRoundTripTime * 1000);
+            if (typeof r.bytesSent === "number") bytesSent = r.bytesSent;
           }
         });
 
         const now = Date.now();
-
         let bitrateBps: number | null = null;
+
         if (bytesSent != null && lastBytesSentRef.current != null && lastStatsAtRef.current != null) {
           const dt = (now - lastStatsAtRef.current) / 1000;
           if (dt > 0) {
@@ -239,69 +213,19 @@ export default function ShareClient({ code }: { code: string }) {
         if (bytesSent != null) lastBytesSentRef.current = bytesSent;
         lastStatsAtRef.current = now;
 
-        let lossPct: number | null = null;
-        if (packetsLost != null && packetsSent != null && packetsSent + packetsLost > 0) {
-          lossPct = Math.round((packetsLost / (packetsSent + packetsLost)) * 1000) / 10;
-        }
-
         const kbps = bitrateBps != null ? Math.round(bitrateBps / 1000) : null;
-        setDebugLine(`auto=${autoQuality} • bitrate=${kbps ?? "?"}kbps • loss=${lossPct ?? "?"}% • rtt=${rttMs ?? "?"}ms`);
-
-        const COOLDOWN_MS = 8000;
-        if (now - lastDecisionAtRef.current < COOLDOWN_MS) return;
-
-        const bad = (lossPct != null && lossPct >= 4) || (rttMs != null && rttMs >= 450) || (kbps != null && kbps < 500);
-        const good = (lossPct != null && lossPct <= 1.2) && (rttMs != null && rttMs <= 220) && (kbps != null && kbps >= 900);
-
-        if (bad) {
-          badStreakRef.current += 1;
-          goodStreakRef.current = 0;
-        } else if (good) {
-          goodStreakRef.current += 1;
-          badStreakRef.current = 0;
-        } else {
-          goodStreakRef.current = Math.max(0, goodStreakRef.current - 1);
-          badStreakRef.current = Math.max(0, badStreakRef.current - 1);
-        }
-
-        if (badStreakRef.current >= 2) {
-          setAutoQuality((q) => {
-            const next = clampQuality(q, "down");
-            if (next !== q && pcRef.current) {
-              applySenderQuality(pcRef.current, next).catch(() => {});
-              lastDecisionAtRef.current = now;
-            }
-            return next;
-          });
-          badStreakRef.current = 0;
-        } else if (goodStreakRef.current >= 6) {
-          setAutoQuality((q) => {
-            const next = clampQuality(q, "up");
-            if (next !== q && pcRef.current) {
-              applySenderQuality(pcRef.current, next).catch(() => {});
-              lastDecisionAtRef.current = now;
-            }
-            return next;
-          });
-          goodStreakRef.current = 0;
-        }
+        setDebugLine(`bitrate=${kbps ?? "?"}kbps`);
       } catch {}
     }, 1500);
   }
 
   async function stopShare() {
     stopStatsLoop();
-    setShowSelfShareHint(false);
 
     try {
       pcRef.current?.close();
     } catch {}
     pcRef.current = null;
-
-    try {
-      if (channelRef.current) await supabase.removeChannel(channelRef.current);
-    } catch {}
-    channelRef.current = null;
 
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -318,22 +242,39 @@ export default function ShareClient({ code }: { code: string }) {
     setStatus("idle");
   }
 
+  // ✅ HARD BLOCK: geen “deze tab/app” delen → stop direct
+  function isForbiddenCapture(track: MediaStreamTrack): boolean {
+    // 1) Als browser tab-share is gekozen → heel vaak mirror-probleem
+    // (kan ook “andere tab” zijn, maar voor jullie use-case willen we tab-share vermijden)
+    const settings: any = (track as any).getSettings?.() || {};
+    if (settings.displaySurface === "browser") return true;
+
+    // 2) Chromium CaptureHandle: als de capturer onze eigen handle ziet → het is deze app/tab
+    try {
+      // @ts-ignore
+      const handle = track.getCaptureHandle?.();
+      if (!handle) return false;
+      const sameOrigin = handle.origin && typeof window !== "undefined" && handle.origin === window.location.origin;
+      const isOurHandle = handle.handle === "kijkevenmee-parent";
+      if (sameOrigin && isOurHandle) return true;
+    } catch {}
+
+    return false;
+  }
+
   async function startShare() {
     await stopShare();
     setStatus("sharing");
-    setShowSelfShareHint(true);
 
-    const ch = supabase.channel(`signal:${code}`);
-    channelRef.current = ch;
-
+    // create pc
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
     pcRef.current = pc;
 
     pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        ch.send({
+      if (e.candidate && channelRef.current) {
+        channelRef.current.send({
           type: "broadcast",
           event: "signal",
           payload: { type: "ice", candidate: e.candidate } satisfies SignalMsg,
@@ -343,49 +284,56 @@ export default function ShareClient({ code }: { code: string }) {
 
     try {
       const stream = await (navigator.mediaDevices as any).getDisplayMedia({
-        video: {
-          frameRate: qualityParams(quality).frameRate,
-        },
+        video: { frameRate: qualityParams(quality).frameRate },
         audio: false,
 
-        // ✅ Chromium-hints om "deel niet huidige tab" te stimuleren
-        // (wordt genegeerd in browsers die dit niet kennen)
+        // Chromium hints (helpen, maar niet genoeg zonder block)
         preferCurrentTab: false,
         selfBrowserSurface: "exclude",
         surfaceSwitching: "include",
         systemAudio: "exclude",
       });
 
-      streamRef.current = stream;
+      const track = stream.getVideoTracks()[0];
+
+      // ✅ Direct blocken als "browser tab" / eigen tab / app capture
+      if (track && isForbiddenCapture(track)) {
+        // stop meteen
+        try {
+          stream.getTracks().forEach((t: any) => t.stop());
+        } catch {}
+        setStatus("idle");
+        alert("Kies 'Hele scherm' of een 'Venster'. Tab delen is niet toegestaan (voorkomt oneindige spiegeling).");
+        return;
+      }
 
       // Als gebruiker stopt via browser UI → status terug
-      const track = stream.getVideoTracks()[0];
       track.addEventListener("ended", () => stopShare());
+
+      streamRef.current = stream;
 
       pc.addTrack(track, stream);
 
+      // local preview
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.play?.().catch(() => {});
       }
 
+      // offer
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-
       lastOfferRef.current = offer;
 
-      await ch.send({
+      await channelRef.current?.send({
         type: "broadcast",
         event: "signal",
         payload: { type: "offer", sdp: offer } satisfies SignalMsg,
       });
 
       await applySenderQuality(pc, quality);
-      setAutoQuality(quality);
 
-      ch.subscribe();
       setStatus("sharing");
-
       startStatsLoop();
     } catch (e) {
       console.error(e);
@@ -395,7 +343,7 @@ export default function ShareClient({ code }: { code: string }) {
     }
   }
 
-  // Snapshot overlay drawing loop (shapes)
+  // Snapshot overlay drawing loop (kind shapes)
   useEffect(() => {
     let raf = 0;
 
@@ -629,23 +577,7 @@ export default function ShareClient({ code }: { code: string }) {
               </div>
             </div>
           ) : (
-            <>
-              <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
-
-              {/* ✅ Waarschuwing tegen “spiegel” */}
-              {showSelfShareHint ? (
-                <div className="absolute top-3 right-3 max-w-[420px] rounded-2xl bg-black/70 border border-white/15 text-white p-3 text-sm">
-                  <div className="font-semibold mb-1">Let op: voorkom spiegeling</div>
-                  <div className="text-white/80">
-                    Kies in de share picker <b>een ander venster</b> of <b>je hele scherm</b> — deel <b>niet</b> deze tab
-                    (kijkevenmee), anders krijg je een oneindige spiegel.
-                  </div>
-                  <div className="mt-2 flex gap-2">
-                    <Button onClick={() => setShowSelfShareHint(false)}>Ok</Button>
-                  </div>
-                </div>
-              ) : null}
-            </>
+            <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
           )}
         </div>
       </ViewerStage>
