@@ -42,7 +42,6 @@ export default function Instellingen() {
       if (prof) {
         setDisplayName(prof.display_name || "");
         setWhatsapp(prof.whatsapp || "");
-        // default: AAN (true) als kolom nog null is
         setUseKoppelcode(prof.use_koppelcode ?? true);
       } else {
         setUseKoppelcode(true);
@@ -71,7 +70,7 @@ export default function Instellingen() {
     <main className="mx-auto max-w-xl space-y-6">
       <header className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight">Instellingen</h1>
-        <p className="text-slate-600">Naam, WhatsApp-nummer en (optioneel) koppelen.</p>
+        <p className="text-slate-600">Naam, WhatsApp-nummer en hoe je een hulpsessie start.</p>
       </header>
 
       <Card>
@@ -82,22 +81,14 @@ export default function Instellingen() {
             <div>
               <label className="block text-sm font-medium text-slate-700">Jouw naam</label>
               <div className="mt-1">
-                <Input
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Bijv. Mark (zoon)"
-                />
+                <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Bijv. Mark (zoon)" />
               </div>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-slate-700">WhatsApp nummer</label>
               <div className="mt-1">
-                <Input
-                  value={whatsapp}
-                  onChange={(e) => setWhatsapp(e.target.value)}
-                  placeholder="Bijv. +31612345678"
-                />
+                <Input value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} placeholder="Bijv. +31612345678" />
               </div>
             </div>
 
@@ -112,11 +103,13 @@ export default function Instellingen() {
                 />
                 <div className="flex-1">
                   <label htmlFor="use_koppelcode" className="block font-medium text-slate-900">
-                    Koppelen met ouder via koppelcode
+                    Meekijken starten met een code (6 cijfers)
                   </label>
                   <p className="mt-1 text-sm text-slate-600">
-                    Als dit <b>uit</b> staat, dan werkt koppelen via een link/"koppelcode" niet. Dan kan je ouder nog
-                    steeds hulp vragen met de <b>eenmalige meekijkcode</b> (6 cijfers) – dat is vaak makkelijker.
+                    Als dit <b>aan</b> staat, dan moet de ouder de 6-cijferige code handmatig doorgeven en jij vult hem in bij <b>Verbinden</b>.
+                    <br />
+                    Als dit <b>uit</b> staat, dan kunnen gekoppelde ouders een hulpsessie starten <b>zonder</b> dat jij een code hoeft over te typen
+                    (je ziet dan automatisch een \"actieve sessie\" bij <b>Verbinden</b>).
                   </p>
                 </div>
               </div>

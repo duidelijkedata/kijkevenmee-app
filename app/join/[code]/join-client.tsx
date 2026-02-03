@@ -20,10 +20,6 @@ type Invite = {
   created_at: string;
 };
 
-type ProfileLite = {
-  use_koppelcode: boolean | null;
-};
-
 export default function JoinClient({ code }: { code: string }) {
   const router = useRouter();
   const supabase = useMemo(() => getSupabaseClient(), []);
@@ -32,9 +28,6 @@ export default function JoinClient({ code }: { code: string }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-
-  // ✅ kind kan koppelen uitzetten in Instellingen
-  const [koppelcodeAllowed, setKoppelcodeAllowed] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -46,17 +39,6 @@ export default function JoinClient({ code }: { code: string }) {
         return;
       }
 
-      // 1) Check kind-instelling (default: true)
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("use_koppelcode")
-        .eq("id", uid)
-        .maybeSingle<ProfileLite>();
-
-      const allowed = prof?.use_koppelcode ?? true;
-      setKoppelcodeAllowed(allowed);
-
-      // 2) Laad invite
       const { data: inv, error } = await supabase
         .from("helper_invites")
         .select("id, code, helper_id, status, expires_at, created_at")
@@ -70,13 +52,7 @@ export default function JoinClient({ code }: { code: string }) {
         return;
       }
 
-      // 3) Toon status + evt. blokkade
-      if (!allowed) {
-        setMessage(
-          "Koppelen via koppelcode staat uit in jouw Instellingen. Zet het daar aan als je wél wilt koppelen. " +
-            "Tip: je ouder kan ook gewoon de eenmalige meekijkcode (6 cijfers) gebruiken."
-        );
-      } else if (inv.status !== "open") {
+      if (inv.status !== "open") {
         setMessage("Deze koppelcode is al gebruikt of niet meer geldig.");
       } else if (new Date(inv.expires_at).getTime() < Date.now()) {
         setMessage("Deze koppelcode is verlopen.");
@@ -93,15 +69,7 @@ export default function JoinClient({ code }: { code: string }) {
     setMessage(null);
 
     try {
-      if (!koppelcodeAllowed) {
-        setMessage(
-          "Koppelen via koppelcode staat uit in jouw Instellingen. Zet het daar aan als je wél wilt koppelen."
-        );
-        return;
-      }
-
       const { error } = await supabase.rpc("accept_helper_invite", { p_code: code });
-
       if (error) {
         setMessage(`Koppelen mislukt: ${error.message}`);
         return;
@@ -123,8 +91,7 @@ export default function JoinClient({ code }: { code: string }) {
     );
   }
 
-  const inviteValid =
-    !!invite && invite.status === "open" && new Date(invite.expires_at).getTime() >= Date.now() && koppelcodeAllowed;
+  const inviteValid = !!invite && invite.status === "open" && new Date(invite.expires_at).getTime() >= Date.now();
 
   return (
     <main style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui", padding: "0 16px" }}>
@@ -153,24 +120,6 @@ export default function JoinClient({ code }: { code: string }) {
 
       {message ? (
         <p style={{ marginTop: 12, color: message.startsWith("✅") ? "#16a34a" : "#b91c1c" }}>{message}</p>
-      ) : null}
-
-      {!koppelcodeAllowed ? (
-        <div
-          style={{
-            marginTop: 12,
-            border: "1px solid #e2e8f0",
-            borderRadius: 14,
-            padding: 12,
-            background: "#f8fafc",
-            color: "#0f172a",
-          }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Koppelen staat uit</div>
-          <div style={{ color: "#475569", fontSize: 13 }}>
-            Ga naar <b>Mijn omgeving → Instellingen</b> om “Koppelen met ouder via koppelcode” aan te zetten.
-          </div>
-        </div>
       ) : null}
 
       <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
