@@ -7,7 +7,7 @@ type Props = {
   children: React.ReactNode;
   sidebarTitle?: string;
   sidebarSubtitle?: string;
-  sidebarWidth?: number; // optioneel, default 320
+  sidebarWidth?: number; // default 320
 };
 
 export default function FullscreenShell({
@@ -18,10 +18,10 @@ export default function FullscreenShell({
   sidebarWidth = 320,
 }: Props) {
   return (
-    // Altijd vast aan viewport + links uitgelijnd
+    // ✅ fixed aan viewport
     <div className="fixed inset-0 z-[50] overflow-hidden bg-black">
       <div className="h-full w-full flex">
-        {/* Sidebar: fixed width, nooit inklapbaar */}
+        {/* ✅ Sidebar: fixed width, altijd zichtbaar */}
         <aside
           className="h-full shrink-0 border-r border-white/10 bg-slate-950 text-white"
           style={{ width: sidebarWidth }}
@@ -43,8 +43,8 @@ export default function FullscreenShell({
           </div>
         </aside>
 
-        {/* Main: always full remaining space */}
-        <main className="relative flex-1 min-w-0 bg-black">
+        {/* ✅ Main: overflow-hidden => pannen kan nooit over sidebar heen */}
+        <main className="relative flex-1 min-w-0 bg-black overflow-hidden">
           <div className="absolute inset-0">{children}</div>
         </main>
       </div>
