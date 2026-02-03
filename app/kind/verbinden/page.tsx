@@ -629,7 +629,12 @@ export default function KindVerbinden() {
                 inputMode="numeric"
               />
               {!connected ? (
-                <Button variant="primary" onClick={connect} disabled={!canConnect || status === "connecting"}>
+                <<Button
+  variant="primary"
+  onClick={() => void connect()}
+  disabled={!canConnect || status === "connecting"}
+>
+
                   {status === "connecting" ? "Verbinden…" : "Verbind"}
                 </Button>
               ) : (
