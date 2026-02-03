@@ -8,7 +8,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 type Role = "ouder" | "kind";
 
 async function getOrigin() {
-  const h = await headers(); // <-- FIX: headers() is async in Next.js 15
+  const h = await headers(); // Next 15: headers() returns Promise
   const host = h.get("x-forwarded-host") ?? h.get("host");
   const proto = h.get("x-forwarded-proto") ?? "https";
   if (!host) return "http://localhost:3000";
@@ -26,12 +26,6 @@ function safeNext(next: string | null) {
   return next;
 }
 
-/**
- * Signup:
- * - email + password + username + role
- * - Supabase verstuurt bevestigingsmail (Confirm email moet aan staan)
- * - na submit redirect naar /login met "check je mail"
- */
 export async function signUpEmailUsernamePassword(formData: FormData) {
   const email = String(formData.get("email") || "").trim().toLowerCase();
   const usernameRaw = String(formData.get("username") || "");
@@ -45,7 +39,6 @@ export async function signUpEmailUsernamePassword(formData: FormData) {
   if (password.length < 8) return { ok: false, error: "Wachtwoord moet minimaal 8 tekens zijn." };
   if (role !== "ouder" && role !== "kind") return { ok: false, error: "Ongeldig profieltype." };
 
-  // voorkom dubbele username: check via service role (admin)
   const admin = supabaseAdmin();
   const { data: existing, error: exErr } = await admin
     .from("profiles")
@@ -56,7 +49,7 @@ export async function signUpEmailUsernamePassword(formData: FormData) {
   if (exErr) return { ok: false, error: exErr.message };
   if (existing && existing.length > 0) return { ok: false, error: "Loginnaam is al in gebruik." };
 
-  const origin = await getOrigin(); // <-- FIX: await
+  const origin = await getOrigin();
   const confirmRedirectTo = `${origin}/auth/confirm`;
 
   const supabase = await supabaseServer();
@@ -74,13 +67,6 @@ export async function signUpEmailUsernamePassword(formData: FormData) {
   redirect(`/login?check_email=1&email=${encodeURIComponent(email)}`);
 }
 
-/**
- * Login:
- * - user voert username + password
- * - server zoekt email bij username (service role)
- * - daarna supabase signInWithPassword (SSR client -> cookies)
- * - redirect op basis van role (of next param)
- */
 export async function signInWithUsernamePassword(formData: FormData) {
   const usernameRaw = String(formData.get("username") || "");
   const password = String(formData.get("password") || "");
