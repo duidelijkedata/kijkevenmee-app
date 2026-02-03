@@ -106,18 +106,18 @@ export default function Instellingen() {
                     Meekijken starten met een code (6 cijfers)
                   </label>
                   <p className="mt-1 text-sm text-slate-600">
-<<<<<<< HEAD
+<HEAD
                     Als dit <b>aan</b> staat, dan moet de ouder de 6-cijferige code handmatig doorgeven en jij vult hem in bij <b>Verbinden</b>.
                     <br />
                     Als dit <b>uit</b> staat, dan kunnen gekoppelde ouders een hulpsessie starten <b>zonder</b> dat jij een code hoeft over te typen
                     (je ziet dan automatisch een \"actieve sessie\" bij <b>Verbinden</b>).
-=======
+
                     Als dit <b>aan</b> staat, dan moet de ouder de 6-cijferige code handmatig doorgeven en jij vult hem in
                     bij <b>Verbinden</b>.
                     <br />
                     Als dit <b>uit</b> staat, dan kunnen gekoppelde ouders een hulpsessie starten <b>zonder</b> dat jij een
                     code hoeft over te typen (je ziet dan automatisch een "actieve sessie" bij <b>Verbinden</b>).
->>>>>>> 091166b (Start hulpsessie zonder code binnen bestaande koppeling)
+091166b (Start hulpsessie zonder code binnen bestaande koppeling)
                   </p>
                 </div>
               </div>

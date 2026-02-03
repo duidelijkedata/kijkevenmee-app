@@ -14,10 +14,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "helper_id required" }, { status: 400 });
   }
 
-<<<<<<< HEAD
-=======
+HEAD
+
   // Require logged-in requester
->>>>>>> 091166b (Start hulpsessie zonder code binnen bestaande koppeling)
+091166b (Start hulpsessie zonder code binnen bestaande koppeling)
   const supabase = await supabaseServer();
   const { data: userData } = await supabase.auth.getUser();
   const user = userData.user;
@@ -26,10 +26,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-<<<<<<< HEAD
-=======
+HEAD
+
   // Verify existing permanent relationship: helper_id (helper/ouder) <-> child_id (requester/kind)
->>>>>>> 091166b (Start hulpsessie zonder code binnen bestaande koppeling)
+091166b (Start hulpsessie zonder code binnen bestaande koppeling)
   const { data: rel, error: relErr } = await supabase
     .from("helper_relationships")
     .select("id")
@@ -37,10 +37,10 @@ export async function POST(req: Request) {
     .eq("child_id", user.id)
     .maybeSingle();
 
-<<<<<<< HEAD
+HEAD
   if (relErr) return NextResponse.json({ error: relErr.message }, { status: 400 });
   if (!rel) return NextResponse.json({ error: "not_linked" }, { status: 403 });
-=======
+
   if (relErr) {
     return NextResponse.json({ error: relErr.message }, { status: 400 });
   }
@@ -48,15 +48,15 @@ export async function POST(req: Request) {
   if (!rel) {
     return NextResponse.json({ error: "not_linked" }, { status: 403 });
   }
->>>>>>> 091166b (Start hulpsessie zonder code binnen bestaande koppeling)
+091166b (Start hulpsessie zonder code binnen bestaande koppeling)
 
   const admin = supabaseAdmin();
   const code = generateCode();
 
-<<<<<<< HEAD
-=======
+HEAD
+
   // Create an open screenshare session that is already assigned to the helper.
->>>>>>> 091166b (Start hulpsessie zonder code binnen bestaande koppeling)
+091166b (Start hulpsessie zonder code binnen bestaande koppeling)
   const { data: session, error } = await admin
     .from("sessions")
     .insert({
@@ -67,13 +67,13 @@ export async function POST(req: Request) {
     .select("id, code, status")
     .single();
 
-<<<<<<< HEAD
+HEAD
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-=======
+
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 400 });
   }
->>>>>>> 091166b (Start hulpsessie zonder code binnen bestaande koppeling)
+091166b (Start hulpsessie zonder code binnen bestaande koppeling)
 
   return NextResponse.json({ session });
 }

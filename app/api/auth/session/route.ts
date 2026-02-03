@@ -1,98 +1,54 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
+import { supabaseServer } from "@/lib/supabase/server";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
-export const runtime = "nodejs";
-
-type CookiesToSet = Array<{
-  name: string;
-  value: string;
-  options?: any;
-}>;
-
-type SessionPayload =
-  | { code: string }
-  | { access_token: string; refresh_token: string }
-  | { token_hash: string; type: string };
+function generateCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
 
 export async function POST(req: Request) {
-  // ✅ Next 15: cookies() is (in jouw setup) async getypt
-  const cookieStore = await cookies();
+  const body = await req.json().catch(() => ({}));
+  const helper_id = String(body?.helper_id || "").trim();
 
-  const res = NextResponse.json({ ok: true });
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.json(
-      { error: "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY" },
-      { status: 500 }
-    );
+  if (!helper_id) {
+    return NextResponse.json({ error: "helper_id required" }, { status: 400 });
   }
 
-  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      getAll() {
-        return cookieStore.getAll();
-      },
-      setAll(cookiesToSet: CookiesToSet) {
-        cookiesToSet.forEach(({ name, value, options }) => {
-          res.cookies.set(name, value, options);
-        });
-      },
-    },
-  });
+  // Require logged-in requester
+  const supabase = await supabaseServer();
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  const user = userData?.user ?? null;
 
-  let body: SessionPayload | any;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  if (userErr || !user) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  // ✅ PKCE: magic link -> /auth/callback?code=...
-  if (body?.code && typeof body.code === "string") {
-    const { error } = await supabase.auth.exchangeCodeForSession(body.code);
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-    return res;
-  }
+  // Must be linked: requester is child_id, target is helper_id
+  const { data: rel, error: relErr } = await supabase
+    .from("helper_relationships")
+    .select("id")
+    .eq("child_id", user.id)
+    .eq("helper_id", helper_id)
+    .maybeSingle();
 
-  // ✅ Implicit tokens (legacy)
-  if (
-    body?.access_token &&
-    body?.refresh_token &&
-    typeof body.access_token === "string" &&
-    typeof body.refresh_token === "string"
-  ) {
-    const { error } = await supabase.auth.setSession({
-      access_token: body.access_token,
-      refresh_token: body.refresh_token,
-    });
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-    return res;
-  }
+  if (relErr) return NextResponse.json({ error: relErr.message }, { status: 400 });
+  if (!rel) return NextResponse.json({ error: "not_linked" }, { status: 403 });
 
-  // ✅ OTP verify (optioneel)
-  if (
-    body?.token_hash &&
-    body?.type &&
-    typeof body.token_hash === "string" &&
-    typeof body.type === "string"
-  ) {
-    const { error } = await supabase.auth.verifyOtp({
-      token_hash: body.token_hash,
-      type: body.type as any,
-    });
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-    return res;
-  }
+  // Create a session assigned to this helper
+  const admin = supabaseAdmin();
+  const code = generateCode();
 
-  return NextResponse.json({ error: "Missing payload" }, { status: 400 });
+  const { data: session, error } = await admin
+    .from("sessions")
+    .insert({
+      code,
+      status: "open",
+      helper_id,
+    })
+    .select("id, code, status")
+    .single();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  return NextResponse.json({ session });
 }
