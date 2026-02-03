@@ -1,15 +1,168 @@
+"use client";
+
 export const dynamic = "force-dynamic";
 
-import { redirect } from "next/navigation";
-import { supabaseServer } from "@/lib/supabase/server";
-import InstellingenClient from "./instellingen-client";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Card, Button, Input } from "@/components/ui";
+import { supabaseBrowser } from "@/lib/supabase/browser";
 
-export default async function InstellingenPage() {
-  const supabase = await supabaseServer();
-  const { data } = await supabase.auth.getUser();
-  const user = data.user;
+type ProfileRow = {
+  id: string;
+  display_name: string | null;
+  whatsapp: string | null;
+  use_koppelcode: boolean | null;
+};
 
-  if (!user) redirect("/kind/login");
+export default function Instellingen() {
+  const router = useRouter();
+  const supabase = useMemo(() => supabaseBrowser(), []);
+  const [loading, setLoading] = useState(true);
 
-  return <InstellingenClient />;
+  const [displayName, setDisplayName] = useState("");
+  const [whatsapp, setWhatsapp] = useState("");
+  const [useKoppelcode, setUseKoppelcode] = useState(true);
+
+  const [userId, setUserId] = useState<string | null>(null);
+
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      setError(null);
+      const { data } = await supabase.auth.getUser();
+      const user = data.user;
+
+      if (!user) {
+        setLoading(false);
+        router.replace(`/kind/login?next=${encodeURIComponent("/kind/instellingen")}`);
+        return;
+      }
+
+      setUserId(user.id);
+
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("id, display_name, whatsapp, use_koppelcode")
+        .eq("id", user.id)
+        .maybeSingle<ProfileRow>();
+
+      if (prof) {
+        setDisplayName(prof.display_name || "");
+        setWhatsapp(prof.whatsapp || "");
+        setUseKoppelcode(prof.use_koppelcode ?? true);
+      } else {
+        setUseKoppelcode(true);
+      }
+
+      setLoading(false);
+    })();
+  }, [supabase, router]);
+
+  async function save() {
+    setError(null);
+
+    if (!userId) {
+      setError("Log eerst in.");
+      return;
+    }
+
+    const trimmed = displayName.trim();
+    if (!trimmed) {
+      setError("Vul je naam in. (Dit is nodig zodat je ouder je herkent.)");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const { error } = await supabase.from("profiles").upsert({
+        id: userId,
+        display_name: trimmed,
+        whatsapp: whatsapp.trim() || null,
+        use_koppelcode: useKoppelcode,
+        updated_at: new Date().toISOString(),
+      });
+
+      if (error) {
+        setError(error.message);
+        return;
+      }
+
+      // terug naar dashboard
+      router.replace("/kind");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <main className="mx-auto max-w-xl space-y-6">
+      <header className="space-y-2">
+        <h1 className="text-3xl font-semibold tracking-tight">Instellingen</h1>
+        <p className="text-slate-600">Naam, WhatsApp-nummer en hoe je een hulpsessie start.</p>
+      </header>
+
+      <Card>
+        {loading ? (
+          <p className="text-slate-700">Laden…</p>
+        ) : (
+          <div className="space-y-4">
+            {error ? <p className="text-red-600">{error}</p> : null}
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700">Jouw naam</label>
+              <div className="mt-1">
+                <Input
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="Bijv. Mark (zoon)"
+                />
+              </div>
+              <p className="mt-1 text-sm text-slate-500">
+                Deze naam ziet je ouder/helper bij koppelingen en sessies.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700">WhatsApp nummer</label>
+              <div className="mt-1">
+                <Input
+                  value={whatsapp}
+                  onChange={(e) => setWhatsapp(e.target.value)}
+                  placeholder="Bijv. +31612345678"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-2xl border bg-slate-50 p-4">
+              <div className="flex items-start gap-3">
+                <input
+                  id="use_koppelcode"
+                  type="checkbox"
+                  className="mt-1 h-4 w-4"
+                  checked={useKoppelcode}
+                  onChange={(e) => setUseKoppelcode(e.target.checked)}
+                />
+                <div className="flex-1">
+                  <label htmlFor="use_koppelcode" className="block font-medium text-slate-900">
+                    Meekijken starten met een code (6 cijfers)
+                  </label>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Als dit <b>aan</b> staat, dan moet de ouder de 6-cijferige code handmatig doorgeven en jij vult hem in bij{" "}
+                    <b>Verbinden</b>. <br />
+                    Als dit <b>uit</b> staat, dan kunnen gekoppelde ouders een hulpsessie starten <b>zonder</b> dat jij een code hoeft over te typen.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <Button variant="primary" className="w-full" onClick={save} disabled={saving}>
+              {saving ? "Opslaan…" : "Opslaan"}
+            </Button>
+          </div>
+        )}
+      </Card>
+    </main>
+  );
 }
