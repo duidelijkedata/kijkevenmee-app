@@ -91,8 +91,6 @@ export default function JoinClient({ code }: { code: string }) {
     );
   }
 
-  const inviteValid = !!invite && invite.status === "open" && new Date(invite.expires_at).getTime() >= Date.now();
-
   const inviteValid =
     !!invite && invite.status === "open" && new Date(invite.expires_at).getTime() >= Date.now();
 
