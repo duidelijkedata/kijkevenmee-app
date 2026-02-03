@@ -1,3 +1,9 @@
+const pathname = req.nextUrl.pathname;
+
+if (pathname.startsWith("/auth/callback")) {
+  return NextResponse.next();
+}
+
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 

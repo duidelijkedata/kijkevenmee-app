@@ -12,7 +12,12 @@ function getSupabaseClient() {
     throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
   }
 
-  return createClient(url, anon);
+  return createClient(url, anon, {
+  auth: {
+    flowType: "pkce",
+  },
+});
+
 }
 
 export default function LoginClient() {
