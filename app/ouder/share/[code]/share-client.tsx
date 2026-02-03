@@ -33,14 +33,22 @@ type PacketState = DrawPacket & { seen: boolean };
 
 function qualityLabel(q: Quality) {
   if (q === "low") return "Laag (stabiel)";
-  if (q === "medium") return "Medium";
-  return "Hoog (scherp)";
+  if (q === "medium") return "Medium (scherper)";
+  return "Hoog (meest scherp)";
 }
 
+/**
+ * ✅ Voorstel 1: hogere bitrate (8–12 Mbps)
+ * ✅ Voorstel 2: hogere fps waar zinvol (maar high blijft 30fps i.v.m. CPU)
+ */
 function qualityParams(q: Quality) {
-  if (q === "low") return { maxBitrate: 900_000, maxFramerate: 12, frameRate: 12 };
-  if (q === "medium") return { maxBitrate: 2_000_000, maxFramerate: 15, frameRate: 15 };
-  return { maxBitrate: 3_500_000, maxFramerate: 20, frameRate: 20 };
+  if (q === "low") {
+    return { maxBitrate: 2_500_000, idealFps: 15, maxFps: 20 };
+  }
+  if (q === "medium") {
+    return { maxBitrate: 8_000_000, idealFps: 30, maxFps: 30 };
+  }
+  return { maxBitrate: 12_000_000, idealFps: 30, maxFps: 60 };
 }
 
 export default function ShareClient({ code }: { code: string }) {
@@ -90,7 +98,6 @@ export default function ShareClient({ code }: { code: string }) {
 
       try {
         if (msg.type === "hello") {
-          // kind is net binnengekomen → resend offer als ouder al aan het delen is
           if (lastOfferRef.current) {
             await ch.send({
               type: "broadcast",
@@ -146,18 +153,37 @@ export default function ShareClient({ code }: { code: string }) {
     } catch {}
   }
 
+  /**
+   * ✅ Voorstel 1: maxBitrate omhoog
+   * ✅ Extra: maintain-resolution (minder “blur” bij tekst)
+   * ✅ Extra: scaleResolutionDownBy = 1 (niet downsizen)
+   */
   async function applySenderQuality(pc: RTCPeerConnection, q: Quality) {
-    const { maxBitrate, maxFramerate } = qualityParams(q);
+    const { maxBitrate, idealFps, maxFps } = qualityParams(q);
     const sender = pc.getSenders().find((s) => s.track?.kind === "video");
     if (!sender) return;
 
     const params = sender.getParameters();
     params.encodings = params.encodings || [{}];
+
     params.encodings[0].maxBitrate = maxBitrate;
-    params.encodings[0].maxFramerate = maxFramerate;
+    params.encodings[0].maxFramerate = maxFps;
+    // @ts-ignore
+    params.encodings[0].scaleResolutionDownBy = 1;
+
+    // @ts-ignore
+    params.degradationPreference = "maintain-resolution";
 
     await sender.setParameters(params);
     await broadcastQuality(q);
+
+    // update capture fps (best effort)
+    try {
+      const t = sender.track as any;
+      if (t?.applyConstraints) {
+        await t.applyConstraints({ frameRate: { ideal: idealFps, max: maxFps } });
+      }
+    } catch {}
   }
 
   function stopStatsLoop() {
@@ -229,11 +255,14 @@ export default function ShareClient({ code }: { code: string }) {
     setStatus("idle");
   }
 
+  /**
+   * ✅ Voorstel 2: 1080p constraints bij capture
+   * ✅ Voorstel 3: contentHint = "text"
+   */
   async function startShare() {
     await stopShare();
     setStatus("sharing");
 
-    // create pc
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
@@ -250,20 +279,40 @@ export default function ShareClient({ code }: { code: string }) {
     };
 
     try {
+      const qp = qualityParams(quality);
+
       const stream = await (navigator.mediaDevices as any).getDisplayMedia({
-        video: { frameRate: qualityParams(quality).frameRate },
+        video: {
+          // ✅ 1080p “best effort”
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: qp.idealFps, max: qp.maxFps },
+        },
         audio: false,
       });
 
       const track = stream.getVideoTracks()[0];
       track.addEventListener("ended", () => stopShare());
 
+      // ✅ content hint voor tekst/UI (Chromium)
+      try {
+        (track as any).contentHint = "text";
+      } catch {}
+
+      // best effort: nogmaals constraints
+      try {
+        await (track as any).applyConstraints?.({
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: qp.idealFps, max: qp.maxFps },
+        });
+      } catch {}
+
       streamRef.current = stream;
 
       pc.addTrack(track, stream);
 
-      // ✅ BELANGRIJK: alleen preview tonen als user dat expliciet aanzet,
-      // anders krijg je scherm-in-scherm als je "Hele scherm" deelt.
+      // preview optioneel (om mirror te voorkomen)
       if (videoRef.current) {
         if (showPreview) {
           videoRef.current.srcObject = stream;
@@ -273,7 +322,6 @@ export default function ShareClient({ code }: { code: string }) {
         }
       }
 
-      // offer
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       lastOfferRef.current = offer;
@@ -296,7 +344,7 @@ export default function ShareClient({ code }: { code: string }) {
     }
   }
 
-  // Snapshot overlay drawing loop (kind shapes)
+  // Snapshot overlay drawing loop (kind shapes) — DPR is al goed ✅
   useEffect(() => {
     let raf = 0;
 
@@ -540,7 +588,14 @@ export default function ShareClient({ code }: { code: string }) {
               </div>
             </div>
           ) : showPreview ? (
-            <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="absolute inset-0 w-full h-full object-contain"
+              style={{ imageRendering: "auto" }}
+            />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center text-white/70">
               <div className="max-w-[560px] text-center px-6">
@@ -551,9 +606,7 @@ export default function ShareClient({ code }: { code: string }) {
                   Het kind ziet je scherm wél.
                 </div>
                 <div className="mt-4">
-                  <Button onClick={() => setShowPreview(true)}>
-                    Preview aan (kan loop geven)
-                  </Button>
+                  <Button onClick={() => setShowPreview(true)}>Preview aan (kan loop geven)</Button>
                 </div>
               </div>
             </div>

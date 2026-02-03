@@ -59,7 +59,6 @@ export default function KindVerbinden() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const channelRef = useRef<any>(null);
 
-  // ✅ autoplay fallback state
   const [needsTapToPlay, setNeedsTapToPlay] = useState(false);
 
   // Zoom + pan
@@ -92,19 +91,20 @@ export default function KindVerbinden() {
     startNY: 0,
   });
 
+  /**
+   * ✅ Voorstel 5: zoom zonder CSS transform scale.
+   * We rekenen pan-limits op viewport size * zoom (layout sizing).
+   */
   function clampPan(nextPan: { x: number; y: number }, nextZoom = zoom) {
     const vp = viewportRef.current;
-    const vid = videoRef.current;
-    if (!vp || !vid) return nextPan;
+    if (!vp) return nextPan;
 
     const vpW = vp.clientWidth || 0;
     const vpH = vp.clientHeight || 0;
-    const baseW = vid.clientWidth || 0;
-    const baseH = vid.clientHeight || 0;
-    if (!vpW || !vpH || !baseW || !baseH) return nextPan;
+    if (!vpW || !vpH) return nextPan;
 
-    const scaledW = baseW * nextZoom;
-    const scaledH = baseH * nextZoom;
+    const scaledW = vpW * nextZoom;
+    const scaledH = vpH * nextZoom;
 
     const minX = Math.min(0, vpW - scaledW);
     const minY = Math.min(0, vpH - scaledH);
@@ -162,7 +162,6 @@ export default function KindVerbinden() {
     });
     pcRef.current = pc;
 
-    // ✅ Track handler
     pc.ontrack = (ev) => {
       const [stream] = ev.streams;
       if (!stream) return;
@@ -173,28 +172,23 @@ export default function KindVerbinden() {
       setNeedsTapToPlay(false);
 
       v.srcObject = stream;
-
-      // ✅ extra zekerheid: autoplay toestaan
-      v.muted = true; // belangrijk voor Safari autoplay
+      v.muted = true;
       v.playsInline = true;
+
+      // ✅ extra hints
+      v.disablePictureInPicture = true;
 
       const tryPlay = async () => {
         try {
           await v.play();
           setNeedsTapToPlay(false);
         } catch {
-          // autoplay geblokkeerd → toon knop
           setNeedsTapToPlay(true);
         }
       };
 
-      // meteen proberen
       tryPlay();
-
-      // en nog eens zodra metadata er is
-      v.onloadedmetadata = () => {
-        tryPlay();
-      };
+      v.onloadedmetadata = () => tryPlay();
     };
 
     pc.onicecandidate = (e) => {
@@ -237,7 +231,6 @@ export default function KindVerbinden() {
       }
     });
 
-    // ✅ HELLO handshake (ouder kan al gestart zijn)
     ch.subscribe((st: string) => {
       if (st === "SUBSCRIBED") {
         ch.send({
@@ -276,28 +269,27 @@ export default function KindVerbinden() {
     } catch {}
   }
 
-  // pointer -> normalized
+  // pointer -> normalized (op basis van viewport + pan + zoom)
   function pointerToNormalized(e: React.PointerEvent) {
     const vp = viewportRef.current;
-    const vid = videoRef.current;
-    if (!vp || !vid) return { nx: 0, ny: 0 };
+    if (!vp) return { nx: 0, ny: 0 };
 
     const rect = vp.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
 
-    const baseW = vid.clientWidth || 1;
-    const baseH = vid.clientHeight || 1;
+    const vpW = vp.clientWidth || 1;
+    const vpH = vp.clientHeight || 1;
 
     const ux = (px - pan.x) / zoom;
     const uy = (py - pan.y) / zoom;
 
-    const nx = clamp(ux / baseW, 0, 1);
-    const ny = clamp(uy / baseH, 0, 1);
+    const nx = clamp(ux / vpW, 0, 1);
+    const ny = clamp(uy / vpH, 0, 1);
     return { nx, ny };
   }
 
-  // Render draft shapes on canvas
+  // Canvas render (DPR sharp) — blijft ✅
   useEffect(() => {
     let raf = 0;
 
@@ -338,9 +330,7 @@ export default function KindVerbinden() {
     function loop() {
       const c = canvasRef.current;
       const vp = viewportRef.current;
-      const vid = videoRef.current;
-
-      if (!c || !vp || !vid) {
+      if (!c || !vp) {
         raf = requestAnimationFrame(loop);
         return;
       }
@@ -359,9 +349,6 @@ export default function KindVerbinden() {
       const h = vp.clientHeight;
       ctx.clearRect(0, 0, w, h);
 
-      const baseW = vid.clientWidth || 1;
-      const baseH = vid.clientHeight || 1;
-
       const all = [...draft];
       if (previewRef.current) all.push(previewRef.current);
 
@@ -372,23 +359,23 @@ export default function KindVerbinden() {
 
       for (const s of all) {
         if (s.kind === "circle") {
-          const tx = pan.x + s.x * baseW * zoom;
-          const ty = pan.y + s.y * baseH * zoom;
-          const r = s.r * Math.max(baseW, baseH) * zoom;
+          const tx = pan.x + s.x * w * zoom;
+          const ty = pan.y + s.y * h * zoom;
+          const r = s.r * Math.max(w, h) * zoom;
           ctx.beginPath();
           ctx.arc(tx, ty, r, 0, Math.PI * 2);
           ctx.stroke();
         } else if (s.kind === "rect") {
-          const x = pan.x + s.x * baseW * zoom;
-          const y = pan.y + s.y * baseH * zoom;
-          const rw = s.w * baseW * zoom;
-          const rh = s.h * baseH * zoom;
+          const x = pan.x + s.x * w * zoom;
+          const y = pan.y + s.y * h * zoom;
+          const rw = s.w * w * zoom;
+          const rh = s.h * h * zoom;
           ctx.strokeRect(x, y, rw, rh);
         } else {
-          const x1 = pan.x + s.x1 * baseW * zoom;
-          const y1 = pan.y + s.y1 * baseH * zoom;
-          const x2 = pan.x + s.x2 * baseW * zoom;
-          const y2 = pan.y + s.y2 * baseH * zoom;
+          const x1 = pan.x + s.x1 * w * zoom;
+          const y1 = pan.y + s.y1 * h * zoom;
+          const x2 = pan.x + s.x2 * w * zoom;
+          const y2 = pan.y + s.y2 * h * zoom;
           drawArrow(ctx, x1, y1, x2, y2);
         }
       }
@@ -531,7 +518,6 @@ export default function KindVerbinden() {
       await v.play();
       setNeedsTapToPlay(false);
     } catch {
-      // blijft geblokkeerd
       setNeedsTapToPlay(true);
     }
   }
@@ -662,10 +648,13 @@ export default function KindVerbinden() {
           onPointerCancel={onViewportPointerUp}
           onPointerLeave={onViewportPointerUp}
         >
+          {/* ✅ Zoom via layout sizing (geen transform scale) */}
           <div
             className="absolute inset-0"
             style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              width: `${zoom * 100}%`,
+              height: `${zoom * 100}%`,
+              transform: `translate(${pan.x}px, ${pan.y}px)`,
               transformOrigin: "top left",
             }}
           >
@@ -675,6 +664,7 @@ export default function KindVerbinden() {
               playsInline
               muted
               className="w-full h-full object-contain"
+              style={{ imageRendering: "auto" }}
             />
           </div>
 
