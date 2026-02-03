@@ -26,7 +26,6 @@ type InviteRow = {
   created_at: string;
   accepted_by: string | null;
   accepted_at: string | null;
-  accepted_by_name?: string | null;
 };
 
 export default function KoppelenClient() {
@@ -37,12 +36,27 @@ export default function KoppelenClient() {
   const [busy, setBusy] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
-  const [invites, setInvites] = useState<InviteRow[]>([]);
+  const [invites, setInvites] = useState<(InviteRow & { accepted_by_name?: string | null })[]>([]);
 
   const origin =
     typeof window !== "undefined" && window.location?.origin
       ? window.location.origin
       : "https://kijkevenmee-app.vercel.app";
+
+  async function lookupNames(ids: string[]) {
+    const unique = Array.from(new Set(ids.filter(Boolean))).slice(0, 50);
+    if (unique.length === 0) return {} as Record<string, string | null>;
+
+    const r = await fetch("/api/profiles/lookup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: unique }),
+    });
+
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return {} as Record<string, string | null>;
+    return (j?.profiles ?? {}) as Record<string, string | null>;
+  }
 
   const refreshInvites = async () => {
     const { data, error } = await supabase
@@ -53,31 +67,17 @@ export default function KoppelenClient() {
 
     if (error || !data) return;
 
-    const rows = (data as any[]) as InviteRow[];
+    const rows = data as InviteRow[];
 
-    // Haal namen op van children die geaccepteerd hebben
-    const acceptedIds = Array.from(
-      new Set(rows.map((r) => r.accepted_by).filter(Boolean) as string[])
+    const acceptedIds = rows.map((r) => r.accepted_by).filter(Boolean) as string[];
+    const nameMap = await lookupNames(acceptedIds);
+
+    setInvites(
+      rows.map((r) => ({
+        ...r,
+        accepted_by_name: r.accepted_by ? nameMap[r.accepted_by] ?? null : null,
+      }))
     );
-
-    let nameMap = new Map<string, string | null>();
-    if (acceptedIds.length > 0) {
-      const { data: profs } = await supabase
-        .from("profiles")
-        .select("id, display_name")
-        .in("id", acceptedIds);
-
-      (profs ?? []).forEach((p: any) => {
-        nameMap.set(p.id, p.display_name ?? null);
-      });
-    }
-
-    const withNames = rows.map((r) => ({
-      ...r,
-      accepted_by_name: r.accepted_by ? nameMap.get(r.accepted_by) ?? null : null,
-    }));
-
-    setInvites(withNames);
   };
 
   useEffect(() => {
@@ -188,7 +188,8 @@ export default function KoppelenClient() {
           {invites.map((inv) => {
             const link = `${origin}/join/${encodeURIComponent(inv.code)}`;
             const acceptedLabel =
-              inv.accepted_by_name || (inv.accepted_by ? inv.accepted_by.slice(0, 8) + "…" : null);
+              inv.accepted_by_name ||
+              (inv.accepted_by ? inv.accepted_by.slice(0, 8) + "…" : null);
 
             return (
               <div

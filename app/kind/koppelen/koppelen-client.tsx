@@ -16,7 +16,7 @@ function normalizeCode(raw: string) {
   const s = (raw || "").trim();
   if (!s) return "";
 
-  // Als iemand tóch een link plakt zoals https://.../join/KEM-ABC123 → pak code uit URL
+  // Als iemand tóch een link plakt zoals https://.../join/KEM-ABC123 → pak de code uit de URL
   try {
     if (s.startsWith("http://") || s.startsWith("https://")) {
       const u = new URL(s);
@@ -39,6 +39,27 @@ export default function KindKoppelenClient() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err" | "info"; text: string } | null>(null);
 
+  async function lookupName(id: string) {
+    const r = await fetch("/api/profiles/lookup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [id] }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return null;
+    return (j?.profiles?.[id] as string | null) ?? null;
+  }
+
+  async function fetchHelperIds(childId: string) {
+    const { data, error } = await supabase
+      .from("helper_relationships")
+      .select("helper_id")
+      .eq("child_id", childId);
+
+    if (error) throw error;
+    return (data ?? []).map((r: any) => r.helper_id).filter(Boolean) as string[];
+  }
+
   async function onKoppelen() {
     setMsg(null);
 
@@ -58,6 +79,12 @@ export default function KindKoppelenClient() {
         return;
       }
 
+      // helpers vóór accept, om te diffen
+      let before: string[] = [];
+      try {
+        before = await fetchHelperIds(uid);
+      } catch {}
+
       const { error } = await supabase.rpc("accept_helper_invite", { p_code: c });
 
       if (error) {
@@ -73,8 +100,24 @@ export default function KindKoppelenClient() {
         return;
       }
 
-      setMsg({ kind: "ok", text: "✅ Gelukt! Je bent nu gekoppeld." });
-      router.replace("/kind/gekoppeld");
+      // helpers na accept -> vind nieuw toegevoegde helper
+      let helperName: string | null = null;
+      try {
+        const after = await fetchHelperIds(uid);
+        const newlyAdded = after.find((id) => !before.includes(id)) ?? null;
+        if (newlyAdded) {
+          helperName = await lookupName(newlyAdded);
+        }
+      } catch {}
+
+      setMsg({
+        kind: "ok",
+        text: helperName ? `✅ Gekoppeld met ${helperName}.` : "✅ Gelukt! Je bent nu gekoppeld.",
+      });
+
+      setTimeout(() => {
+        router.replace("/kind/gekoppeld");
+      }, 900);
     } finally {
       setBusy(false);
     }
@@ -97,7 +140,7 @@ export default function KindKoppelenClient() {
           spellCheck={false}
         />
 
-        <Button onClick={onKoppelen} disabled={busy}>
+        <Button variant="primary" onClick={onKoppelen} disabled={busy}>
           {busy ? "Bezig…" : "Koppelen"}
         </Button>
 

@@ -13,7 +13,7 @@ export default async function KindHome() {
     <main className="space-y-6">
       <header className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight">Mijn omgeving</h1>
-        <p className="text-slate-600">Overzicht van verzoeken, screenshots en historie.</p>
+        <p className="text-slate-600">Overzicht van verzoeken, historie, koppelingen en meekijken.</p>
       </header>
 
       {!user ? (
@@ -22,7 +22,7 @@ export default async function KindHome() {
           <p className="mt-1 text-slate-600">Log in met je e-mailadres. Je krijgt een link per mail.</p>
           <div className="mt-4">
             <Link href="/kind/login">
-              <Button className="w-full">Naar login</Button>
+              <Button variant="primary" className="w-full">Naar login</Button>
             </Link>
           </div>
         </Card>
@@ -45,10 +45,10 @@ export default async function KindHome() {
           </Card>
 
           <Card>
-            <h2 className="text-lg font-semibold">Instellingen</h2>
-            <p className="mt-1 text-slate-600">Naam en WhatsApp-nummer.</p>
+            <h2 className="text-lg font-semibold">Meekijken</h2>
+            <p className="mt-1 text-slate-600">Ga naar het meekijk-scherm en vul een code in.</p>
             <div className="mt-4">
-              <Link href="/kind/instellingen"><Button className="w-full">Open instellingen</Button></Link>
+              <Link href="/kind/verbinden"><Button className="w-full" variant="primary">Verbinden</Button></Link>
             </div>
           </Card>
 
@@ -57,7 +57,7 @@ export default async function KindHome() {
             <p className="mt-1 text-slate-600">Koppel met ouder(s) via koppelcode.</p>
             <div className="mt-4 flex flex-col gap-2">
               <Link href="/kind/koppelen"><Button className="w-full">Koppelcode plakken</Button></Link>
-              <Link href="/kind/gekoppeld"><Button className="w-full">Gekoppelde helpers</Button></Link>
+              <Link href="/kind/gekoppeld"><Button className="w-full">Gekoppelde ouders</Button></Link>
             </div>
           </Card>
         </div>

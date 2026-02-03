@@ -11,7 +11,7 @@ function getSupabaseClient() {
   return createBrowserClient(url, anon);
 }
 
-type Profile = {
+type HelperRow = {
   id: string;
   display_name: string | null;
   use_koppelcode?: boolean | null;
@@ -23,9 +23,23 @@ export default function GekoppeldClient() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [helpers, setHelpers] = useState<Profile[]>([]);
-  const [startingFor, setStartingFor] = useState<string | null>(null);
-  const [, setLastCreated] = useState<{ helperId: string; code: string } | null>(null);
+
+  const [helpers, setHelpers] = useState<HelperRow[]>([]);
+
+  async function lookupNames(ids: string[]) {
+    const unique = Array.from(new Set(ids.filter(Boolean))).slice(0, 50);
+    if (unique.length === 0) return {} as Record<string, string | null>;
+
+    const r = await fetch("/api/profiles/lookup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: unique }),
+    });
+
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return {} as Record<string, string | null>;
+    return (j?.profiles ?? {}) as Record<string, string | null>;
+  }
 
   useEffect(() => {
     (async () => {
@@ -52,7 +66,7 @@ export default function GekoppeldClient() {
         return;
       }
 
-      const helperIds = (rels ?? []).map((r: any) => r.helper_id).filter(Boolean);
+      const helperIds = (rels ?? []).map((r: any) => r.helper_id).filter(Boolean) as string[];
 
       if (helperIds.length === 0) {
         setHelpers([]);
@@ -60,59 +74,37 @@ export default function GekoppeldClient() {
         return;
       }
 
-      // 2) profielen ophalen (vereist profiles_select_related policy)
+      // 2) use_koppelcode proberen op te halen (mag falen door RLS)
       const { data: profs, error: profErr } = await supabase
         .from("profiles")
-        .select("id, display_name, use_koppelcode")
+        .select("id, use_koppelcode")
         .in("id", helperIds);
 
-      if (profErr) {
-        setError(profErr.message);
-        setLoading(false);
-        return;
+      const useMap = new Map<string, boolean | null>();
+      if (!profErr && profs) {
+        for (const p of profs as any[]) useMap.set(p.id, p.use_koppelcode ?? null);
       }
 
-      const byId = new Map((profs ?? []).map((p: any) => [p.id, p]));
-      const ordered = helperIds.map((id: string) => byId.get(id)).filter(Boolean) as Profile[];
+      // 3) namen via server lookup (service role)
+      const nameMap = await lookupNames(helperIds);
 
-      setHelpers(ordered);
+      const result: HelperRow[] = helperIds.map((id) => ({
+        id,
+        display_name: nameMap[id] ?? null,
+        use_koppelcode: useMap.get(id) ?? null,
+      }));
+
+      setHelpers(result);
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function startNoCode(helperId: string) {
-    setStartingFor(helperId);
-    setLastCreated(null);
-    try {
-      const r = await fetch("/api/sessions/create-linked", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ helper_id: helperId }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        const msg = j?.error === "not_linked" ? "Niet gekoppeld (meer) met deze helper." : (j?.error ?? "Onbekende fout");
-        alert(msg);
-        return;
-      }
-      const code = String(j?.session?.code || "");
-      if (!code) {
-        alert("Sessie gemaakt, maar geen code ontvangen.");
-        return;
-      }
-      setLastCreated({ helperId, code });
-      router.push(`/ouder/share/${code}`);
-    } finally {
-      setStartingFor(null);
-    }
-  }
-
   return (
     <main style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui", padding: "0 16px" }}>
-      <h1 style={{ fontSize: 22, margin: "0 0 8px 0" }}>Gekoppelde helpers</h1>
+      <h1 style={{ fontSize: 22, margin: "0 0 8px 0" }}>Gekoppelde ouders/helpers</h1>
       <p style={{ color: "#475569", marginTop: 0 }}>
-        Hier zie je met welke helper/ouders jouw account gekoppeld is.
+        Hier zie je met welke ouder(s)/helper(s) jouw account gekoppeld is.
       </p>
 
       {loading ? <p style={{ color: "#475569", marginTop: 16 }}>Laden…</p> : null}
@@ -126,6 +118,7 @@ export default function GekoppeldClient() {
         <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
           {helpers.map((h) => {
             const label = h.display_name?.trim() || `Gebruiker ${h.id.slice(0, 8)}…`;
+
             return (
               <div
                 key={h.id}
@@ -139,33 +132,26 @@ export default function GekoppeldClient() {
                 <div style={{ fontWeight: 800 }}>{label}</div>
                 <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>{h.id}</div>
 
-                {/* Als de helper 'Meekijken starten met code' UIT heeft, kunnen we dit extra-makkelijk maken */}
-                {h.use_koppelcode === false ? (
-                  <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <button
-                      onClick={() => startNoCode(h.id)}
-                      disabled={startingFor === h.id}
-                      style={{
-                        padding: "10px 12px",
-                        borderRadius: 12,
-                        border: "1px solid #0f172a",
-                        background: startingFor === h.id ? "#e2e8f0" : "#0f172a",
-                        color: startingFor === h.id ? "#0f172a" : "#ffffff",
-                        cursor: startingFor === h.id ? "not-allowed" : "pointer",
-                        fontWeight: 800,
-                      }}
-                    >
-                      {startingFor === h.id ? "Bezig…" : "Start hulp (zonder code)"}
-                    </button>
-                    <div style={{ color: "#64748b", fontSize: 13, alignSelf: "center" }}>
-                      Helper ziet dit automatisch bij <b>Verbinden</b>.
-                    </div>
+                <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button
+                    onClick={() => router.push("/kind/verbinden")}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: 12,
+                      border: "1px solid #0f172a",
+                      background: "#0f172a",
+                      color: "#fff",
+                      cursor: "pointer",
+                      fontWeight: 800,
+                    }}
+                  >
+                    Start meekijken
+                  </button>
+
+                  <div style={{ color: "#64748b", fontSize: 13, alignSelf: "center" }}>
+                    Ga naar <b>Verbinden</b> om een 6-cijferige code in te vullen.
                   </div>
-                ) : (
-                  <div style={{ marginTop: 10, color: "#64748b", fontSize: 13 }}>
-                    Deze helper gebruikt de 6-cijferige meekijkcode.
-                  </div>
-                )}
+                </div>
               </div>
             );
           })}
