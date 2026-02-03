@@ -91,12 +91,10 @@ export default function JoinClient({ code }: { code: string }) {
     );
   }
 
-HEAD
   const inviteValid = !!invite && invite.status === "open" && new Date(invite.expires_at).getTime() >= Date.now();
 
   const inviteValid =
     !!invite && invite.status === "open" && new Date(invite.expires_at).getTime() >= Date.now();
-091166b (Start hulpsessie zonder code binnen bestaande koppeling)
 
   return (
     <main style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui", padding: "0 16px" }}>
