@@ -1,5 +1,6 @@
 "use client";
 
+import type React from "react";
 import { useMemo, useRef, useState, useEffect } from "react";
 import { Button, Input } from "@/components/ui";
 import { supabaseBrowser } from "@/lib/supabase/browser";
@@ -48,7 +49,7 @@ export default function KindVerbinden() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [code, setCode] = useState("");
 
-  // Optioneel: als 'Meekijken starten met code' UIT staat, tonen we sessies die al aan jou zijn toegewezen.
+  // Als 'Meekijken starten met code' UIT staat, tonen we sessies die al aan jou zijn toegewezen.
   const [useKoppelcode, setUseKoppelcode] = useState<boolean>(true);
   const [activeSessions, setActiveSessions] = useState<{ id: string; code: string; created_at?: string }[]>([]);
   const [activeError, setActiveError] = useState<string | null>(null);
@@ -97,7 +98,7 @@ export default function KindVerbinden() {
   });
 
   /**
-   * ✅ Voorstel 5: zoom zonder CSS transform scale.
+   * ✅ Zoom zonder CSS transform scale.
    * We rekenen pan-limits op viewport size * zoom (layout sizing).
    */
   function clampPan(nextPan: { x: number; y: number }, nextZoom = zoom) {
@@ -147,7 +148,7 @@ export default function KindVerbinden() {
 
   useEffect(() => {
     return () => {
-      cleanup();
+      void cleanup();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -184,6 +185,7 @@ export default function KindVerbinden() {
 
       const flag = prof?.use_koppelcode ?? true;
       setUseKoppelcode(flag);
+
       if (flag === false) {
         await refreshActiveSessions();
       } else {
@@ -233,8 +235,8 @@ export default function KindVerbinden() {
         }
       };
 
-      tryPlay();
-      v.onloadedmetadata = () => tryPlay();
+      void tryPlay();
+      v.onloadedmetadata = () => void tryPlay();
     };
 
     pc.onicecandidate = (e) => {
@@ -335,7 +337,7 @@ export default function KindVerbinden() {
     return { nx, ny };
   }
 
-  // Canvas render (DPR sharp) — blijft ✅
+  // Canvas render (DPR sharp)
   useEffect(() => {
     let raf = 0;
 
@@ -581,7 +583,8 @@ export default function KindVerbinden() {
               {remoteQuality ? (
                 <>
                   <span className="text-white/50"> • </span>
-                  <span className="text-white/70">kwaliteit ouder:</span> <span className="font-mono">{remoteQuality}</span>
+                  <span className="text-white/70">kwaliteit ouder:</span>{" "}
+                  <span className="font-mono">{remoteQuality}</span>
                 </>
               ) : null}
             </div>
@@ -597,15 +600,23 @@ export default function KindVerbinden() {
               ) : (
                 <div className="flex flex-col gap-2">
                   {activeSessions.map((s) => (
-                    <div key={s.id} className="flex items-center justify-between gap-2 rounded-xl bg-white/5 border border-white/10 p-2">
+                    <div
+                      key={s.id}
+                      className="flex items-center justify-between gap-2 rounded-xl bg-white/5 border border-white/10 p-2"
+                    >
                       <div className="text-sm text-white">
-                        <span className="text-white/70">code:</span> <span className="font-mono">{String(s.code).slice(0, 3)} {String(s.code).slice(3)}</span>
+                        <span className="text-white/70">code:</span>{" "}
+                        <span className="font-mono">
+                          {String(s.code).slice(0, 3)} {String(s.code).slice(3)}
+                        </span>
                       </div>
+
+                      {/* ✅ No-code UX: kind hoeft niets te typen; we gebruiken de code intern */}
                       <Button
                         variant="primary"
                         onClick={() => {
                           setCode(formatCode(String(s.code)));
-                          connect(String(s.code));
+                          void connect(String(s.code));
                         }}
                       >
                         Open
@@ -627,19 +638,25 @@ export default function KindVerbinden() {
                 onChange={(e) => setCode(formatCode(e.target.value))}
                 placeholder="123 456"
                 inputMode="numeric"
+                disabled={!useKoppelcode}
               />
-              {!connected ? (
-  <Button
-    variant="primary"
-    onClick={() => void connect()}
-    disabled={!canConnect || status === "connecting"}
-  >
-    {status === "connecting" ? "Verbinden…" : "Verbind"}
-  </Button>
-) : (
-  <Button onClick={disconnect}>Stop</Button>
-)}
 
+              {!connected ? (
+                <Button
+                  variant="primary"
+                  onClick={() => void connect()}
+                  disabled={!canConnect || status === "connecting" || !useKoppelcode}
+                  title={!useKoppelcode ? "Code is uitgeschakeld; gebruik Actieve sessies." : undefined}
+                >
+                  {status === "connecting" ? "Verbinden…" : "Verbind"}
+                </Button>
+              ) : (
+                <Button onClick={disconnect}>Stop</Button>
+              )}
+
+              {!useKoppelcode ? (
+                <div className="text-xs text-white/60">Code is uitgeschakeld. Gebruik “Actieve sessies”.</div>
+              ) : null}
             </div>
           </div>
 
@@ -675,7 +692,10 @@ export default function KindVerbinden() {
                 Zoom: <span className="font-mono text-white/80">{Math.round(zoom * 100)}%</span>
               </div>
               <div className="text-xs text-white/60">
-                Pan: <span className="font-mono text-white/80">{Math.round(pan.x)},{Math.round(pan.y)}</span>
+                Pan:{" "}
+                <span className="font-mono text-white/80">
+                  {Math.round(pan.x)},{Math.round(pan.y)}
+                </span>
               </div>
             </div>
           </div>
@@ -684,7 +704,12 @@ export default function KindVerbinden() {
             <div className="text-sm text-white/60 mb-2">Aantekeningen</div>
 
             <label className="flex items-center gap-2 text-sm text-white/80">
-              <input type="checkbox" checked={annotate} onChange={(e) => setAnnotate(e.target.checked)} disabled={!connected} />
+              <input
+                type="checkbox"
+                checked={annotate}
+                onChange={(e) => setAnnotate(e.target.checked)}
+                disabled={!connected}
+              />
               Aan
             </label>
 
@@ -701,7 +726,11 @@ export default function KindVerbinden() {
               </select>
 
               <div className="flex flex-wrap gap-2">
-                <Button onClick={() => setDraft((d) => d.slice(0, -1))} disabled={!annotate || draft.length === 0} title="Undo">
+                <Button
+                  onClick={() => setDraft((d) => d.slice(0, -1))}
+                  disabled={!annotate || draft.length === 0}
+                  title="Undo"
+                >
                   Undo
                 </Button>
                 <Button onClick={() => setDraft([])} disabled={!annotate || draft.length === 0}>
@@ -730,7 +759,6 @@ export default function KindVerbinden() {
           onPointerCancel={onViewportPointerUp}
           onPointerLeave={onViewportPointerUp}
         >
-          {/* ✅ Zoom via layout sizing (geen transform scale) */}
           <div
             className="absolute inset-0"
             style={{
@@ -740,14 +768,7 @@ export default function KindVerbinden() {
               transformOrigin: "top left",
             }}
           >
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-contain"
-              style={{ imageRendering: "auto" }}
-            />
+            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
           </div>
 
           <canvas
