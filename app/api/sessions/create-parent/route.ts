@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 function generateCode() {
+<<<<<<< HEAD
+=======
+  // 6 digits
+>>>>>>> 091166b (Start hulpsessie zonder code binnen bestaande koppeling)
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
@@ -11,8 +15,15 @@ export async function POST(req: Request) {
   const requester_note = typeof body?.requester_note === "string" ? body.requester_note : null;
 
   const supabase = supabaseAdmin();
+<<<<<<< HEAD
   const code = generateCode();
 
+=======
+
+  const code = generateCode();
+
+  // Minimal schema assumption (matches usage in UI + snapshots/historie)
+>>>>>>> 091166b (Start hulpsessie zonder code binnen bestaande koppeling)
   const { data: session, error } = await supabase
     .from("sessions")
     .insert({

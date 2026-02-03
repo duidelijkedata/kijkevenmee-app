@@ -48,6 +48,11 @@ export default function KindVerbinden() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [code, setCode] = useState("");
 
+  // Optioneel: als 'Meekijken starten met code' UIT staat, tonen we sessies die al aan jou zijn toegewezen.
+  const [useKoppelcode, setUseKoppelcode] = useState<boolean>(true);
+  const [activeSessions, setActiveSessions] = useState<{ id: string; code: string; created_at?: string }[]>([]);
+  const [activeError, setActiveError] = useState<string | null>(null);
+
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
   const [remoteQuality, setRemoteQuality] = useState<Quality | null>(null);
@@ -147,8 +152,49 @@ export default function KindVerbinden() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function connect() {
-    const raw = code.replace(/\D/g, "");
+  async function refreshActiveSessions() {
+    setActiveError(null);
+    try {
+      const r = await fetch("/api/sessions/active-for-helper");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setActiveSessions([]);
+        setActiveError(j?.error ?? "Kan actieve sessies niet laden.");
+        return;
+      }
+      setActiveSessions(Array.isArray(j?.sessions) ? j.sessions : []);
+    } catch {
+      setActiveSessions([]);
+      setActiveError("Kan actieve sessies niet laden.");
+    }
+  }
+
+  // Als de instelling UIT staat, toon sessies die al aan jou (helper) toegewezen zijn.
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      const user = data.user;
+      if (!user) return;
+
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("use_koppelcode")
+        .eq("id", user.id)
+        .maybeSingle<{ use_koppelcode: boolean | null }>();
+
+      const flag = prof?.use_koppelcode ?? true;
+      setUseKoppelcode(flag);
+      if (flag === false) {
+        await refreshActiveSessions();
+      } else {
+        setActiveSessions([]);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function connect(rawOverride?: string) {
+    const raw = String(rawOverride ?? code).replace(/\D/g, "");
     if (raw.length !== 6) return alert("Vul 6 cijfers in.");
 
     await cleanup();
@@ -540,6 +586,37 @@ export default function KindVerbinden() {
               ) : null}
             </div>
           </div>
+
+          {!useKoppelcode ? (
+            <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+              <div className="text-sm text-white/60 mb-2">Actieve sessies</div>
+              {activeError ? <div className="text-sm text-red-200 mb-2">{activeError}</div> : null}
+
+              {activeSessions.length === 0 ? (
+                <div className="text-sm text-white/70">Geen open sessies gevonden.</div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {activeSessions.map((s) => (
+                    <div key={s.id} className="flex items-center justify-between gap-2 rounded-xl bg-white/5 border border-white/10 p-2">
+                      <div className="text-sm text-white">
+                        <span className="text-white/70">code:</span> <span className="font-mono">{String(s.code).slice(0, 3)} {String(s.code).slice(3)}</span>
+                      </div>
+                      <Button
+                        variant="primary"
+                        onClick={() => {
+                          setCode(formatCode(String(s.code)));
+                          connect(String(s.code));
+                        }}
+                      >
+                        Open
+                      </Button>
+                    </div>
+                  ))}
+                  <Button onClick={refreshActiveSessions}>Ververs</Button>
+                </div>
+              )}
+            </div>
+          ) : null}
 
           <div className="rounded-xl bg-white/5 border border-white/10 p-3">
             <div className="text-sm text-white/60 mb-2">Koppelcode</div>

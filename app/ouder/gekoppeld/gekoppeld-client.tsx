@@ -14,6 +14,7 @@ function getSupabaseClient() {
 type Profile = {
   id: string;
   display_name: string | null;
+  use_koppelcode?: boolean | null;
 };
 
 export default function GekoppeldClient() {
@@ -22,7 +23,8 @@ export default function GekoppeldClient() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [children, setChildren] = useState<Profile[]>([]);
+  const [helpers, setHelpers] = useState<Profile[]>([]);
+  const [startingFor, setStartingFor] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -33,15 +35,16 @@ export default function GekoppeldClient() {
       const uid = data?.user?.id ?? null;
 
       if (!uid) {
-        router.replace(`/kind/login?next=${encodeURIComponent("/ouder/gekoppeld")}`);
+        router.replace(`/ouder/login?next=${encodeURIComponent("/ouder/gekoppeld")}`);
         return;
       }
 
-      // 1) relaties ophalen waar jij helper bent
+      // 🔁 Voor ouder (requester): relaties ophalen waar jij "child_id" bent
+      // (jouw schema bevat helper_relationships: child_id <-> helper_id)
       const { data: rels, error: relErr } = await supabase
         .from("helper_relationships")
-        .select("child_id")
-        .eq("helper_id", uid);
+        .select("helper_id")
+        .eq("child_id", uid);
 
       if (relErr) {
         setError(relErr.message);
@@ -49,19 +52,18 @@ export default function GekoppeldClient() {
         return;
       }
 
-      const childIds = (rels ?? []).map((r: any) => r.child_id).filter(Boolean);
+      const helperIds = (rels ?? []).map((r: any) => r.helper_id).filter(Boolean);
 
-      if (childIds.length === 0) {
-        setChildren([]);
+      if (helperIds.length === 0) {
+        setHelpers([]);
         setLoading(false);
         return;
       }
 
-      // 2) profielen ophalen (vereist profiles_select_related policy)
       const { data: profs, error: profErr } = await supabase
         .from("profiles")
-        .select("id, display_name")
-        .in("id", childIds);
+        .select("id, display_name, use_koppelcode")
+        .in("id", helperIds);
 
       if (profErr) {
         setError(profErr.message);
@@ -69,21 +71,44 @@ export default function GekoppeldClient() {
         return;
       }
 
-      // sorteer in dezelfde volgorde als rels (optioneel)
       const byId = new Map((profs ?? []).map((p: any) => [p.id, p]));
-      const ordered = childIds.map((id: string) => byId.get(id)).filter(Boolean) as Profile[];
+      const ordered = helperIds.map((id: string) => byId.get(id)).filter(Boolean) as Profile[];
 
-      setChildren(ordered);
+      setHelpers(ordered);
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function startNoCode(helperId: string) {
+    setStartingFor(helperId);
+    try {
+      const r = await fetch("/api/sessions/create-linked", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ helper_id: helperId }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert(j?.error ?? "Kon geen sessie starten.");
+        return;
+      }
+      const code = String(j?.session?.code || "");
+      if (!code) {
+        alert("Sessie gestart, maar geen code ontvangen.");
+        return;
+      }
+      router.push(`/ouder/share/${code}`);
+    } finally {
+      setStartingFor(null);
+    }
+  }
+
   return (
     <main style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui", padding: "0 16px" }}>
-      <h1 style={{ fontSize: 22, margin: "0 0 8px 0" }}>Gekoppelde kinderen</h1>
+      <h1 style={{ fontSize: 22, margin: "0 0 8px 0" }}>Gekoppelde helpers</h1>
       <p style={{ color: "#475569", marginTop: 0 }}>
-        Hier zie je met welke accounts jouw helper/ouder-account gekoppeld is.
+        Hier zie je met welke helper(s) je gekoppeld bent.
       </p>
 
       <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
@@ -105,17 +130,19 @@ export default function GekoppeldClient() {
       {loading ? <p style={{ color: "#475569", marginTop: 16 }}>Laden…</p> : null}
       {error ? <p style={{ color: "#b91c1c", marginTop: 16 }}>Fout: {error}</p> : null}
 
-      {!loading && !error && children.length === 0 ? (
-        <p style={{ color: "#64748b", marginTop: 16 }}>Nog geen gekoppelde kinderen.</p>
+      {!loading && !error && helpers.length === 0 ? (
+        <p style={{ color: "#64748b", marginTop: 16 }}>Nog geen gekoppelde helpers.</p>
       ) : null}
 
-      {!loading && !error && children.length > 0 ? (
+      {!loading && !error && helpers.length > 0 ? (
         <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
-          {children.map((c) => {
-            const label = c.display_name?.trim() || `Gebruiker ${c.id.slice(0, 8)}…`;
+          {helpers.map((h) => {
+            const label = h.display_name?.trim() || `Gebruiker ${h.id.slice(0, 8)}…`;
+            const noCode = h.use_koppelcode === false;
+
             return (
               <div
-                key={c.id}
+                key={h.id}
                 style={{
                   border: "1px solid #e2e8f0",
                   borderRadius: 14,
@@ -124,7 +151,34 @@ export default function GekoppeldClient() {
                 }}
               >
                 <div style={{ fontWeight: 800 }}>{label}</div>
-                <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>{c.id}</div>
+                <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>{h.id}</div>
+
+                {noCode ? (
+                  <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button
+                      onClick={() => startNoCode(h.id)}
+                      disabled={startingFor === h.id}
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: 12,
+                        border: "1px solid #0f172a",
+                        background: startingFor === h.id ? "#e2e8f0" : "#0f172a",
+                        color: startingFor === h.id ? "#0f172a" : "#ffffff",
+                        cursor: startingFor === h.id ? "not-allowed" : "pointer",
+                        fontWeight: 800,
+                      }}
+                    >
+                      {startingFor === h.id ? "Bezig…" : "Start hulp (zonder code)"}
+                    </button>
+                    <div style={{ color: "#64748b", fontSize: 13, alignSelf: "center" }}>
+                      Helper ziet dit automatisch bij <b>Verbinden</b>.
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 10, color: "#64748b", fontSize: 13 }}>
+                    Deze helper gebruikt de 6-cijferige meekijkcode.
+                  </div>
+                )}
               </div>
             );
           })}

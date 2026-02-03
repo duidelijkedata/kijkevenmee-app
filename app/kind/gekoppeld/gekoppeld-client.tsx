@@ -14,6 +14,7 @@ function getSupabaseClient() {
 type Profile = {
   id: string;
   display_name: string | null;
+  use_koppelcode?: boolean | null;
 };
 
 export default function GekoppeldClient() {
@@ -23,6 +24,8 @@ export default function GekoppeldClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [helpers, setHelpers] = useState<Profile[]>([]);
+  const [startingFor, setStartingFor] = useState<string | null>(null);
+  const [, setLastCreated] = useState<{ helperId: string; code: string } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -60,7 +63,7 @@ export default function GekoppeldClient() {
       // 2) profielen ophalen (vereist profiles_select_related policy)
       const { data: profs, error: profErr } = await supabase
         .from("profiles")
-        .select("id, display_name")
+        .select("id, display_name, use_koppelcode")
         .in("id", helperIds);
 
       if (profErr) {
@@ -77,6 +80,33 @@ export default function GekoppeldClient() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function startNoCode(helperId: string) {
+    setStartingFor(helperId);
+    setLastCreated(null);
+    try {
+      const r = await fetch("/api/sessions/create-linked", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ helper_id: helperId }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = j?.error === "not_linked" ? "Niet gekoppeld (meer) met deze helper." : (j?.error ?? "Onbekende fout");
+        alert(msg);
+        return;
+      }
+      const code = String(j?.session?.code || "");
+      if (!code) {
+        alert("Sessie gemaakt, maar geen code ontvangen.");
+        return;
+      }
+      setLastCreated({ helperId, code });
+      router.push(`/ouder/share/${code}`);
+    } finally {
+      setStartingFor(null);
+    }
+  }
 
   return (
     <main style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui", padding: "0 16px" }}>
@@ -108,6 +138,34 @@ export default function GekoppeldClient() {
               >
                 <div style={{ fontWeight: 800 }}>{label}</div>
                 <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>{h.id}</div>
+
+                {/* Als de helper 'Meekijken starten met code' UIT heeft, kunnen we dit extra-makkelijk maken */}
+                {h.use_koppelcode === false ? (
+                  <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button
+                      onClick={() => startNoCode(h.id)}
+                      disabled={startingFor === h.id}
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: 12,
+                        border: "1px solid #0f172a",
+                        background: startingFor === h.id ? "#e2e8f0" : "#0f172a",
+                        color: startingFor === h.id ? "#0f172a" : "#ffffff",
+                        cursor: startingFor === h.id ? "not-allowed" : "pointer",
+                        fontWeight: 800,
+                      }}
+                    >
+                      {startingFor === h.id ? "Bezig…" : "Start hulp (zonder code)"}
+                    </button>
+                    <div style={{ color: "#64748b", fontSize: 13, alignSelf: "center" }}>
+                      Helper ziet dit automatisch bij <b>Verbinden</b>.
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 10, color: "#64748b", fontSize: 13 }}>
+                    Deze helper gebruikt de 6-cijferige meekijkcode.
+                  </div>
+                )}
               </div>
             );
           })}
