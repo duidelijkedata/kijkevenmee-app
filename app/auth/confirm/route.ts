@@ -2,10 +2,20 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
+type CookieOptions = {
+  path?: string;
+  domain?: string;
+  maxAge?: number;
+  expires?: Date;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: "lax" | "strict" | "none";
+};
+
 type CookieToSet = {
   name: string;
   value: string;
-  options?: Parameters<ReturnType<typeof cookies>["set"]>[2];
+  options?: CookieOptions;
 };
 
 export async function GET(request: Request) {
@@ -38,7 +48,8 @@ export async function GET(request: Request) {
         },
         setAll(cookiesToSet: CookieToSet[]) {
           cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options);
+            // Next expects options as CookieOptions-like object; this matches shape
+            cookieStore.set(name, value, options as any);
           });
         },
       },
