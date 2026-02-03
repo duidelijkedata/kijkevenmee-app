@@ -18,25 +18,26 @@ function generateCode() {
   return s;
 }
 
+type InviteRow = {
+  id: string;
+  code: string;
+  status: string;
+  expires_at: string;
+  created_at: string;
+  accepted_by: string | null;
+  accepted_at: string | null;
+  accepted_by_name?: string | null;
+};
+
 export default function KoppelenClient() {
   const router = useRouter();
   const supabase = useMemo(() => getSupabaseClient(), []);
 
   const [userId, setUserId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
-  const [invites, setInvites] = useState<
-    Array<{
-      id: string;
-      code: string;
-      status: string;
-      expires_at: string;
-      created_at: string;
-      accepted_by: string | null;
-      accepted_at: string | null;
-    }>
-  >([]);
+  const [invites, setInvites] = useState<InviteRow[]>([]);
 
   const origin =
     typeof window !== "undefined" && window.location?.origin
@@ -50,12 +51,37 @@ export default function KoppelenClient() {
       .order("created_at", { ascending: false })
       .limit(20);
 
-    if (!error && data) setInvites(data as any);
+    if (error || !data) return;
+
+    const rows = (data as any[]) as InviteRow[];
+
+    // Haal namen op van children die geaccepteerd hebben
+    const acceptedIds = Array.from(
+      new Set(rows.map((r) => r.accepted_by).filter(Boolean) as string[])
+    );
+
+    let nameMap = new Map<string, string | null>();
+    if (acceptedIds.length > 0) {
+      const { data: profs } = await supabase
+        .from("profiles")
+        .select("id, display_name")
+        .in("id", acceptedIds);
+
+      (profs ?? []).forEach((p: any) => {
+        nameMap.set(p.id, p.display_name ?? null);
+      });
+    }
+
+    const withNames = rows.map((r) => ({
+      ...r,
+      accepted_by_name: r.accepted_by ? nameMap.get(r.accepted_by) ?? null : null,
+    }));
+
+    setInvites(withNames);
   };
 
   useEffect(() => {
     (async () => {
-      // ✅ Nu werkt dit ook met SSR cookies
       const { data } = await supabase.auth.getUser();
       const uid = data?.user?.id ?? null;
 
@@ -72,11 +98,11 @@ export default function KoppelenClient() {
 
   const createInvite = async () => {
     setBusy(true);
-    setStatus(null);
+    setStatusMsg(null);
 
     try {
       if (!userId) {
-        setStatus("Niet ingelogd.");
+        setStatusMsg("Niet ingelogd.");
         return;
       }
 
@@ -89,23 +115,30 @@ export default function KoppelenClient() {
         });
 
         if (!error) {
-          setStatus("Nieuwe koppelcode aangemaakt.");
+          setStatusMsg("Nieuwe koppelcode aangemaakt.");
           await refreshInvites();
           return;
         }
 
         const msg = (error as any)?.message ?? "";
-        if (msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("unique")) {
-          continue;
-        }
+        if (msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("unique")) continue;
 
-        setStatus(`Fout: ${msg}`);
+        setStatusMsg(`Fout: ${msg}`);
         return;
       }
 
-      setStatus("Kon geen unieke code maken. Probeer opnieuw.");
+      setStatusMsg("Kon geen unieke code maken. Probeer opnieuw.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const copyCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setStatusMsg("Code gekopieerd naar klembord.");
+    } catch {
+      setStatusMsg("Kopiëren mislukt. Kopieer handmatig de code.");
     }
   };
 
@@ -113,9 +146,9 @@ export default function KoppelenClient() {
     const link = `${origin}/join/${encodeURIComponent(code)}`;
     try {
       await navigator.clipboard.writeText(link);
-      setStatus("Link gekopieerd naar klembord.");
+      setStatusMsg("Link gekopieerd naar klembord.");
     } catch {
-      setStatus("Kopiëren mislukt. Kopieer handmatig de link hieronder.");
+      setStatusMsg("Kopiëren mislukt. Kopieer handmatig de link hieronder.");
     }
   };
 
@@ -123,7 +156,8 @@ export default function KoppelenClient() {
     <main style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui", padding: "0 16px" }}>
       <h1 style={{ fontSize: 22, margin: "0 0 8px 0" }}>Koppelen met kind</h1>
       <p style={{ color: "#475569", marginTop: 0 }}>
-        Maak een koppelcode aan en stuur de link naar je kind om te koppelen.
+        Maak een koppelcode aan en stuur die code naar je kind. Je kind kan inloggen en in{" "}
+        <b>Mijn omgeving</b> de code plakken bij <b>Koppelcode ouder(s)</b>.
       </p>
 
       <button
@@ -143,7 +177,7 @@ export default function KoppelenClient() {
         {busy ? "Bezig…" : "Nieuwe koppelcode maken"}
       </button>
 
-      {status ? <p style={{ marginTop: 12, color: "#475569" }}>{status}</p> : null}
+      {statusMsg ? <p style={{ marginTop: 12, color: "#475569" }}>{statusMsg}</p> : null}
 
       <h2 style={{ fontSize: 16, marginTop: 22 }}>Recente codes</h2>
 
@@ -153,6 +187,9 @@ export default function KoppelenClient() {
         <div style={{ display: "grid", gap: 10 }}>
           {invites.map((inv) => {
             const link = `${origin}/join/${encodeURIComponent(inv.code)}`;
+            const acceptedLabel =
+              inv.accepted_by_name || (inv.accepted_by ? inv.accepted_by.slice(0, 8) + "…" : null);
+
             return (
               <div
                 key={inv.id}
@@ -168,12 +205,27 @@ export default function KoppelenClient() {
                     <div style={{ fontWeight: 700 }}>{inv.code}</div>
                     <div style={{ color: "#64748b", fontSize: 13 }}>
                       Status: <b>{inv.status}</b> • Verloopt:{" "}
-                      {new Date(inv.expires_at).toLocaleString("nl-NL")}
+                      {inv.expires_at ? new Date(inv.expires_at).toLocaleString("nl-NL") : ""}
                     </div>
-                    <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>{link}</div>
+                    <div style={{ color: "#64748b", fontSize: 13, marginTop: 4, wordBreak: "break-all" }}>{link}</div>
                   </div>
 
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <button
+                      onClick={() => copyCode(inv.code)}
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 10,
+                        border: "1px solid #0f172a",
+                        background: "#0f172a",
+                        color: "#fff",
+                        cursor: "pointer",
+                        fontWeight: 700,
+                      }}
+                    >
+                      Kopieer code
+                    </button>
+
                     <button
                       onClick={() => copyLink(inv.code)}
                       style={{
@@ -192,7 +244,8 @@ export default function KoppelenClient() {
 
                 {inv.accepted_by ? (
                   <div style={{ marginTop: 10, color: "#16a34a", fontSize: 13 }}>
-                    ✅ Geaccepteerd op {inv.accepted_at ? new Date(inv.accepted_at).toLocaleString("nl-NL") : ""}
+                    ✅ Geaccepteerd door <b>{acceptedLabel}</b> op{" "}
+                    {inv.accepted_at ? new Date(inv.accepted_at).toLocaleString("nl-NL") : ""}
                   </div>
                 ) : null}
               </div>
