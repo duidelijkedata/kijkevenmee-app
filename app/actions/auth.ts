@@ -7,8 +7,8 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 
 type Role = "ouder" | "kind";
 
-function getOrigin() {
-  const h = headers();
+async function getOrigin() {
+  const h = await headers(); // <-- FIX: headers() is async in Next.js 15
   const host = h.get("x-forwarded-host") ?? h.get("host");
   const proto = h.get("x-forwarded-proto") ?? "https";
   if (!host) return "http://localhost:3000";
@@ -30,7 +30,7 @@ function safeNext(next: string | null) {
  * Signup:
  * - email + password + username + role
  * - Supabase verstuurt bevestigingsmail (Confirm email moet aan staan)
- * - na submit tonen we "check je mail" pagina/tekst (geen auto-login)
+ * - na submit redirect naar /login met "check je mail"
  */
 export async function signUpEmailUsernamePassword(formData: FormData) {
   const email = String(formData.get("email") || "").trim().toLowerCase();
@@ -56,26 +56,21 @@ export async function signUpEmailUsernamePassword(formData: FormData) {
   if (exErr) return { ok: false, error: exErr.message };
   if (existing && existing.length > 0) return { ok: false, error: "Loginnaam is al in gebruik." };
 
-  const origin = getOrigin();
+  const origin = await getOrigin(); // <-- FIX: await
   const confirmRedirectTo = `${origin}/auth/confirm`;
 
-  // signUp (stuurt bevestigingsmail als confirm email aan staat)
   const supabase = await supabaseServer();
   const { error } = await supabase.auth.signUp({
     email,
     password,
     options: {
       emailRedirectTo: confirmRedirectTo,
-      data: {
-        username,
-        role,
-      },
+      data: { username, role },
     },
   });
 
   if (error) return { ok: false, error: error.message };
 
-  // na signup: ga naar login met "check je mail"
   redirect(`/login?check_email=1&email=${encodeURIComponent(email)}`);
 }
 
@@ -84,7 +79,7 @@ export async function signUpEmailUsernamePassword(formData: FormData) {
  * - user voert username + password
  * - server zoekt email bij username (service role)
  * - daarna supabase signInWithPassword (SSR client -> cookies)
- * - redirect op basis van role in profiles (of next param)
+ * - redirect op basis van role (of next param)
  */
 export async function signInWithUsernamePassword(formData: FormData) {
   const usernameRaw = String(formData.get("username") || "");
@@ -113,7 +108,6 @@ export async function signInWithUsernamePassword(formData: FormData) {
 
   if (error) return { ok: false, error: "Onjuiste loginnaam of wachtwoord." };
 
-  // Redirect: next > role-based
   if (next) redirect(next);
   redirect(profile.role === "ouder" ? "/ouder" : "/kind");
 }
