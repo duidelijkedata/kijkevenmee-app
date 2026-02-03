@@ -9,7 +9,6 @@ import { supabaseBrowser } from "@/lib/supabase/browser";
 
 type ProfileRow = {
   id: string;
-  display_name: string | null;
   whatsapp: string | null;
   use_koppelcode: boolean | null;
 };
@@ -17,20 +16,23 @@ type ProfileRow = {
 export default function Instellingen() {
   const router = useRouter();
   const supabase = useMemo(() => supabaseBrowser(), []);
-  const [loading, setLoading] = useState(true);
 
-  const [displayName, setDisplayName] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string>("");
+
   const [whatsapp, setWhatsapp] = useState("");
   const [useKoppelcode, setUseKoppelcode] = useState(true);
 
-  const [userId, setUserId] = useState<string | null>(null);
-
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     (async () => {
       setError(null);
+      setLoading(true);
+
       const { data } = await supabase.auth.getUser();
       const user = data.user;
 
@@ -41,18 +43,20 @@ export default function Instellingen() {
       }
 
       setUserId(user.id);
+      setUserEmail(user.email ?? "");
 
+      // Profiel kan bestaan of niet; instellingen mogen altijd werken
       const { data: prof } = await supabase
         .from("profiles")
-        .select("id, display_name, whatsapp, use_koppelcode")
+        .select("id, whatsapp, use_koppelcode")
         .eq("id", user.id)
         .maybeSingle<ProfileRow>();
 
       if (prof) {
-        setDisplayName(prof.display_name || "");
         setWhatsapp(prof.whatsapp || "");
         setUseKoppelcode(prof.use_koppelcode ?? true);
       } else {
+        // default voor nieuwe users
         setUseKoppelcode(true);
       }
 
@@ -68,28 +72,43 @@ export default function Instellingen() {
       return;
     }
 
-    const trimmed = displayName.trim();
-    if (!trimmed) {
-      setError("Vul je naam in. (Dit is nodig zodat je ouder je herkent.)");
-      return;
-    }
-
     setSaving(true);
     try {
-      const { error } = await supabase.from("profiles").upsert({
+      // Probeer eerst UPDATE (voorkomt INSERT issues)
+      const { error: updErr } = await supabase
+        .from("profiles")
+        .update({
+          whatsapp: whatsapp.trim() || null,
+          use_koppelcode: useKoppelcode,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", userId);
+
+      if (!updErr) {
+        router.replace("/kind");
+        return;
+      }
+
+      // Als update faalt omdat row nog niet bestaat of door RLS edge case:
+      // doe een insert/upsert met minimaal verplichte velden (email is NOT NULL in jouw schema)
+      if (!userEmail) {
+        setError("Je account heeft geen e-mailadres. Log opnieuw in.");
+        return;
+      }
+
+      const { error: upsertErr } = await supabase.from("profiles").upsert({
         id: userId,
-        display_name: trimmed,
+        email: userEmail, // ✅ nodig vanwege NOT NULL constraint
         whatsapp: whatsapp.trim() || null,
         use_koppelcode: useKoppelcode,
         updated_at: new Date().toISOString(),
       });
 
-      if (error) {
-        setError(error.message);
+      if (upsertErr) {
+        setError(upsertErr.message);
         return;
       }
 
-      // terug naar dashboard
       router.replace("/kind");
     } finally {
       setSaving(false);
@@ -100,7 +119,9 @@ export default function Instellingen() {
     <main className="mx-auto max-w-xl space-y-6">
       <header className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight">Instellingen</h1>
-        <p className="text-slate-600">Naam, WhatsApp-nummer en hoe je een hulpsessie start.</p>
+        <p className="text-slate-600">
+          WhatsApp-nummer en hoe je een hulpsessie start.
+        </p>
       </header>
 
       <Card>
@@ -111,20 +132,6 @@ export default function Instellingen() {
             {error ? <p className="text-red-600">{error}</p> : null}
 
             <div>
-              <label className="block text-sm font-medium text-slate-700">Jouw naam</label>
-              <div className="mt-1">
-                <Input
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Bijv. Mark (zoon)"
-                />
-              </div>
-              <p className="mt-1 text-sm text-slate-500">
-                Deze naam ziet je ouder/helper bij koppelingen en sessies.
-              </p>
-            </div>
-
-            <div>
               <label className="block text-sm font-medium text-slate-700">WhatsApp nummer</label>
               <div className="mt-1">
                 <Input
@@ -133,6 +140,9 @@ export default function Instellingen() {
                   placeholder="Bijv. +31612345678"
                 />
               </div>
+              <p className="mt-1 text-sm text-slate-500">
+                Optioneel. Handig als je ouder je via WhatsApp wil bereiken.
+              </p>
             </div>
 
             <div className="rounded-2xl border bg-slate-50 p-4">
