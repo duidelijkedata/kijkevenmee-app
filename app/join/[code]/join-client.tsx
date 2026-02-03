@@ -20,6 +20,10 @@ type Invite = {
   created_at: string;
 };
 
+type ProfileLite = {
+  use_koppelcode: boolean | null;
+};
+
 export default function JoinClient({ code }: { code: string }) {
   const router = useRouter();
   const supabase = useMemo(() => getSupabaseClient(), []);
@@ -29,9 +33,11 @@ export default function JoinClient({ code }: { code: string }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  // ✅ kind kan koppelen uitzetten in Instellingen
+  const [koppelcodeAllowed, setKoppelcodeAllowed] = useState(true);
+
   useEffect(() => {
     (async () => {
-      // ✅ Nu werkt dit ook met SSR cookies
       const { data } = await supabase.auth.getUser();
       const uid = data?.user?.id ?? null;
 
@@ -40,6 +46,17 @@ export default function JoinClient({ code }: { code: string }) {
         return;
       }
 
+      // 1) Check kind-instelling (default: true)
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("use_koppelcode")
+        .eq("id", uid)
+        .maybeSingle<ProfileLite>();
+
+      const allowed = prof?.use_koppelcode ?? true;
+      setKoppelcodeAllowed(allowed);
+
+      // 2) Laad invite
       const { data: inv, error } = await supabase
         .from("helper_invites")
         .select("id, code, helper_id, status, expires_at, created_at")
@@ -53,7 +70,13 @@ export default function JoinClient({ code }: { code: string }) {
         return;
       }
 
-      if (inv.status !== "open") {
+      // 3) Toon status + evt. blokkade
+      if (!allowed) {
+        setMessage(
+          "Koppelen via koppelcode staat uit in jouw Instellingen. Zet het daar aan als je wél wilt koppelen. " +
+            "Tip: je ouder kan ook gewoon de eenmalige meekijkcode (6 cijfers) gebruiken."
+        );
+      } else if (inv.status !== "open") {
         setMessage("Deze koppelcode is al gebruikt of niet meer geldig.");
       } else if (new Date(inv.expires_at).getTime() < Date.now()) {
         setMessage("Deze koppelcode is verlopen.");
@@ -70,6 +93,13 @@ export default function JoinClient({ code }: { code: string }) {
     setMessage(null);
 
     try {
+      if (!koppelcodeAllowed) {
+        setMessage(
+          "Koppelen via koppelcode staat uit in jouw Instellingen. Zet het daar aan als je wél wilt koppelen."
+        );
+        return;
+      }
+
       const { error } = await supabase.rpc("accept_helper_invite", { p_code: code });
 
       if (error) {
@@ -92,6 +122,9 @@ export default function JoinClient({ code }: { code: string }) {
       </main>
     );
   }
+
+  const inviteValid =
+    !!invite && invite.status === "open" && new Date(invite.expires_at).getTime() >= Date.now() && koppelcodeAllowed;
 
   return (
     <main style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui", padding: "0 16px" }}>
@@ -122,6 +155,24 @@ export default function JoinClient({ code }: { code: string }) {
         <p style={{ marginTop: 12, color: message.startsWith("✅") ? "#16a34a" : "#b91c1c" }}>{message}</p>
       ) : null}
 
+      {!koppelcodeAllowed ? (
+        <div
+          style={{
+            marginTop: 12,
+            border: "1px solid #e2e8f0",
+            borderRadius: 14,
+            padding: 12,
+            background: "#f8fafc",
+            color: "#0f172a",
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Koppelen staat uit</div>
+          <div style={{ color: "#475569", fontSize: 13 }}>
+            Ga naar <b>Mijn omgeving → Instellingen</b> om “Koppelen met ouder via koppelcode” aan te zetten.
+          </div>
+        </div>
+      ) : null}
+
       <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
         <button
           onClick={() => router.replace("/kind")}
@@ -139,14 +190,14 @@ export default function JoinClient({ code }: { code: string }) {
 
         <button
           onClick={accept}
-          disabled={busy || !invite || invite.status !== "open" || new Date(invite.expires_at).getTime() < Date.now()}
+          disabled={busy || !inviteValid}
           style={{
             padding: "10px 12px",
             borderRadius: 12,
             border: "1px solid #0f172a",
-            background: busy ? "#e2e8f0" : "#0f172a",
-            color: busy ? "#0f172a" : "#ffffff",
-            cursor: busy ? "not-allowed" : "pointer",
+            background: busy || !inviteValid ? "#e2e8f0" : "#0f172a",
+            color: busy || !inviteValid ? "#0f172a" : "#ffffff",
+            cursor: busy || !inviteValid ? "not-allowed" : "pointer",
             fontWeight: 700,
           }}
         >
