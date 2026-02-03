@@ -19,17 +19,15 @@ export default async function KindHome() {
       {!user ? (
         <Card>
           <h2 className="text-xl font-semibold">Inloggen</h2>
-          <p className="mt-1 text-slate-600">
-            Log in met je e-mailadres. Je krijgt een link per mail.
-          </p>
+          <p className="mt-1 text-slate-600">Log in met je e-mailadres. Je krijgt een link per mail.</p>
           <div className="mt-4">
             <Link href="/kind/login">
-              <Button variant="primary" className="w-full">Naar login</Button>
+              <Button className="w-full">Naar login</Button>
             </Link>
           </div>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-4">
           <Card>
             <h2 className="text-lg font-semibold">Inbox</h2>
             <p className="mt-1 text-slate-600">Nieuwe verzoeken en screenshots.</p>
@@ -37,6 +35,7 @@ export default async function KindHome() {
               <Link href="/kind/inbox"><Button className="w-full">Open inbox</Button></Link>
             </div>
           </Card>
+
           <Card>
             <h2 className="text-lg font-semibold">Historie</h2>
             <p className="mt-1 text-slate-600">Eerdere hulpsessies.</p>
@@ -44,11 +43,21 @@ export default async function KindHome() {
               <Link href="/kind/historie"><Button className="w-full">Bekijk historie</Button></Link>
             </div>
           </Card>
+
           <Card>
             <h2 className="text-lg font-semibold">Instellingen</h2>
             <p className="mt-1 text-slate-600">Naam en WhatsApp-nummer.</p>
             <div className="mt-4">
               <Link href="/kind/instellingen"><Button className="w-full">Open instellingen</Button></Link>
+            </div>
+          </Card>
+
+          <Card>
+            <h2 className="text-lg font-semibold">Koppelen</h2>
+            <p className="mt-1 text-slate-600">Koppel met ouder(s) via koppelcode.</p>
+            <div className="mt-4 flex flex-col gap-2">
+              <Link href="/kind/koppelen"><Button className="w-full">Koppelcode plakken</Button></Link>
+              <Link href="/kind/gekoppeld"><Button className="w-full">Gekoppelde helpers</Button></Link>
             </div>
           </Card>
         </div>

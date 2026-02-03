@@ -14,22 +14,16 @@ export default async function KindKoppelenPage() {
     <main className="space-y-6">
       <header className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight">Koppelen met ouder(s)</h1>
-        <p className="text-slate-600">
-          Plak hier de koppelcode die je van je ouder/helper hebt gekregen.
-        </p>
+        <p className="text-slate-600">Plak hier de koppelcode die je van je ouder/helper hebt gekregen.</p>
       </header>
 
       {!user ? (
         <Card>
           <h2 className="text-xl font-semibold">Inloggen</h2>
-          <p className="mt-1 text-slate-600">
-            Log in met je e-mailadres. Je krijgt een link per mail.
-          </p>
+          <p className="mt-1 text-slate-600">Log in met je e-mailadres. Je krijgt een link per mail.</p>
           <div className="mt-4">
             <Link href={`/kind/login?next=${encodeURIComponent("/kind/koppelen")}`}>
-              <Button variant="primary" className="w-full">
-                Naar login
-              </Button>
+              <Button className="w-full">Naar login</Button>
             </Link>
           </div>
         </Card>

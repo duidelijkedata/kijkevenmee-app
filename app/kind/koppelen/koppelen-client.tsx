@@ -16,7 +16,7 @@ function normalizeCode(raw: string) {
   const s = (raw || "").trim();
   if (!s) return "";
 
-  // Als iemand tóch een link plakt zoals https://.../join/KEM-ABC123 → pak de code uit de URL
+  // Als iemand tóch een link plakt zoals https://.../join/KEM-ABC123 → pak code uit URL
   try {
     if (s.startsWith("http://") || s.startsWith("https://")) {
       const u = new URL(s);
@@ -31,31 +31,13 @@ function normalizeCode(raw: string) {
   return s.toUpperCase().replace(/\s+/g, "");
 }
 
-type Msg = { kind: "ok" | "err" | "info"; text: string };
-
 export default function KindKoppelenClient() {
   const router = useRouter();
   const supabase = useMemo(() => getSupabaseClient(), []);
 
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<Msg | null>(null);
-
-  async function fetchHelperIds(uid: string) {
-    const { data, error } = await supabase
-      .from("helper_relationships")
-      .select("helper_id")
-      .eq("child_id", uid);
-
-    if (error) throw error;
-    return (data ?? []).map((r: any) => r.helper_id).filter(Boolean) as string[];
-  }
-
-  async function fetchProfileName(id: string) {
-    const { data, error } = await supabase.from("profiles").select("id, display_name").eq("id", id).maybeSingle();
-    if (error) return null;
-    return (data?.display_name as string | null) ?? null;
-  }
+  const [msg, setMsg] = useState<{ kind: "ok" | "err" | "info"; text: string } | null>(null);
 
   async function onKoppelen() {
     setMsg(null);
@@ -76,15 +58,6 @@ export default function KindKoppelenClient() {
         return;
       }
 
-      // 1) Helpers vóór accept (om te kunnen diffen)
-      let before: string[] = [];
-      try {
-        before = await fetchHelperIds(uid);
-      } catch {
-        // niet fatal; koppelen kan alsnog slagen
-      }
-
-      // 2) Accept via jouw bestaande RPC
       const { error } = await supabase.rpc("accept_helper_invite", { p_code: c });
 
       if (error) {
@@ -100,26 +73,8 @@ export default function KindKoppelenClient() {
         return;
       }
 
-      // 3) Helpers ná accept → vind nieuw gekoppelde helper
-      let helperName: string | null = null;
-      try {
-        const after = await fetchHelperIds(uid);
-        const newlyAdded = after.find((id) => !before.includes(id)) ?? null;
-
-        if (newlyAdded) {
-          helperName = await fetchProfileName(newlyAdded);
-        }
-      } catch {
-        // ignore; we tonen dan generiek succes
-      }
-
-      const label = helperName ? `Gekoppeld met ${helperName}.` : "✅ Gelukt! Je bent nu gekoppeld.";
-      setMsg({ kind: "ok", text: label });
-
-      // Laat het even zichtbaar zijn, daarna door naar overzicht
-      setTimeout(() => {
-        router.replace("/kind/gekoppeld");
-      }, 900);
+      setMsg({ kind: "ok", text: "✅ Gelukt! Je bent nu gekoppeld." });
+      router.replace("/kind/gekoppeld");
     } finally {
       setBusy(false);
     }
@@ -142,7 +97,7 @@ export default function KindKoppelenClient() {
           spellCheck={false}
         />
 
-        <Button variant="primary" onClick={onKoppelen} disabled={busy}>
+        <Button onClick={onKoppelen} disabled={busy}>
           {busy ? "Bezig…" : "Koppelen"}
         </Button>
 
