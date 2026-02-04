@@ -117,36 +117,39 @@ export default function ShareClient({ code }: { code: string }) {
   }
 
   // ===== Signaling =====
-  useEffect(() => {
-    const ch = supabase.channel(`signal:${code}`);
-    channelRef.current = ch;
+// ===== Signaling =====
+useEffect(() => {
+  const ch = supabase.channel(`signal:${code}`);
+  channelRef.current = ch;
 
-    ch.on("broadcast", { event: "signal" }, async ({ payload }: any) => {
-      const msg = payload as SignalMsg;
+  ch.on("broadcast", { event: "signal" }, async ({ payload }: any) => {
+    const msg = payload as SignalMsg;
 
+    try {
       if (msg.type === "hello" && lastOfferRef.current) {
         await ch.send({
           type: "broadcast",
           event: "signal",
-          payload: { type: "offer", sdp: lastOfferRef.current },
+          payload: { type: "offer", sdp: lastOfferRef.current } satisfies SignalMsg,
         });
         return;
       }
 
       if (msg.type === "cam_preview") {
         setCamPreviewJpeg(msg.jpeg);
-        setCamPreviewAt(msg.at);
+        setCamPreviewAt(msg.at || Date.now());
         return;
       }
 
       if (msg.type === "active_source") {
-        setActiveSource(msg.source);
+        setActiveSourceState(msg.source);
         return;
       }
 
       if (msg.type === "draw_packet") {
-        setPackets((p) => [...p, { ...msg.packet, seen: false }]);
-        setActivePacketId(msg.packet.id);
+        const packet = msg.packet;
+        setPackets((prev) => [...prev, { ...packet, seen: document.visibilityState === "visible" }]);
+        setActivePacketId(packet.id);
         return;
       }
 
@@ -156,15 +159,31 @@ export default function ShareClient({ code }: { code: string }) {
       if (msg.type === "answer") {
         await pc.setRemoteDescription(msg.sdp);
         setStatus("connected");
+        return;
       }
+
       if (msg.type === "ice") {
         await pc.addIceCandidate(msg.candidate);
+        return;
       }
-    });
+    } catch (e) {
+      console.error(e);
+      setStatus("error");
+    }
+  });
 
-    ch.subscribe();
-    return () => supabase.removeChannel(ch);
-  }, [supabase, code]);
+  // subscribe (mag async zijn, maar we awaiten niet in effect body)
+  void ch.subscribe();
+
+  // ✅ cleanup moet sync zijn
+  return () => {
+    try {
+      // removeChannel kan Promise teruggeven -> NIET returnen/awaiten
+      void supabase.removeChannel(ch);
+    } catch {}
+  };
+}, [supabase, code]);
+
 
   async function startShare() {
     if (status !== "idle") return;
