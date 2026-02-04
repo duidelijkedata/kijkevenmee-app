@@ -53,7 +53,10 @@ export default function KindVerbinden() {
 
   // Als 'Meekijken starten met code' UIT staat, tonen we sessies die al aan jou zijn toegewezen.
   const [useKoppelcode, setUseKoppelcode] = useState<boolean>(true);
-  const [activeSessions, setActiveSessions] = useState<{ id: string; code: string; created_at?: string }[]>([]);
+  const [activeSessions, setActiveSessions] = useState<
+  { id: string; code: string; requester_name?: string | null; created_at?: string }[]
+>([]);
+
   const [activeError, setActiveError] = useState<string | null>(null);
 
   const [connected, setConnected] = useState(false);
@@ -702,8 +705,11 @@ export default function KindVerbinden() {
                       onClick={() => void connect(s.code)}
                       className="text-left rounded-xl border px-3 py-2 hover:bg-slate-50"
                     >
-                      <div className="text-xs text-slate-500">Code</div>
-                      <div className="font-semibold tracking-widest">{formatCode(s.code)}</div>
+                      <div className="text-xs text-slate-500">
+  {String(s.requester_name ?? "").trim() || "Ouder"}
+</div>
+<div className="font-semibold tracking-widest">{formatCode(s.code)}</div>
+
                     </button>
                   ))
                 ) : (
