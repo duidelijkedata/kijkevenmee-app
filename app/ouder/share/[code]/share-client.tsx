@@ -626,7 +626,18 @@ export default function ShareClient({ code }: { code: string }) {
                       setCamLoading(false);
 
                       // bij openen: schakel bron naar camera (kind toont telefoon zodra die er is)
-                      await broadcastActiveSource("camera");
+                      <Button
+  onClick={() => {
+    setCamOpen(true);
+    setCamError("");
+    setCamLink("");
+    setCamLoading(false);
+    // GEEN active_source switch hier.
+  }}
+>
+  Telefoon als camera
+</Button>
+
                     }}
                   >
                     Telefoon als camera
