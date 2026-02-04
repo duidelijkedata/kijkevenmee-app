@@ -51,7 +51,6 @@ export default function KindVerbinden() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [code, setCode] = useState("");
 
-  // Als 'Meekijken starten met code' UIT staat, tonen we sessies die al aan jou zijn toegewezen.
   const [useKoppelcode, setUseKoppelcode] = useState<boolean>(true);
   const [activeSessions, setActiveSessions] = useState<
     { id: string; code: string; requester_name?: string | null; created_at?: string }[]
@@ -81,7 +80,6 @@ export default function KindVerbinden() {
   const activeSourceRef = useRef<ActiveSource>("screen");
   const [activeSource, setActiveSource] = useState<ActiveSource>("screen");
 
-  // Canvas + annotate
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -94,7 +92,6 @@ export default function KindVerbinden() {
   const [shapes, setShapes] = useState<DraftShape[]>([]);
   const [needsTapToPlay, setNeedsTapToPlay] = useState(false);
 
-  // pan/zoom
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
@@ -213,6 +210,7 @@ export default function KindVerbinden() {
     setStatus("connecting");
     setConnectHint("Verbinden…");
     gotAnySignalRef.current = false;
+
     const attempt = ++connectAttemptRef.current;
     if (waitHintTimerRef.current) {
       window.clearTimeout(waitHintTimerRef.current);
@@ -227,14 +225,12 @@ export default function KindVerbinden() {
     activeSourceRef.current = "screen";
     setActiveSource("screen");
 
-    // ===== Signaling channels =====
     const ch = supabase.channel(`signal:${raw}`);
     channelRef.current = ch;
 
     const chCam = supabase.channel(`signalcam:${raw}`);
     channelCamRef.current = chCam;
 
-    // ===== Peer connections =====
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
@@ -281,6 +277,7 @@ export default function KindVerbinden() {
 
     ch.on("broadcast", { event: "signal" }, async (payload: any) => {
       const msg = payload.payload as SignalMsg;
+
       gotAnySignalRef.current = true;
       if (waitHintTimerRef.current) {
         window.clearTimeout(waitHintTimerRef.current);
@@ -334,11 +331,6 @@ export default function KindVerbinden() {
           else attachStream(camStreamRef.current);
           return;
         }
-
-        if (msg.type === "draw_packet") {
-          // bestaand: draw packets verwerken (laat jouw bestaande handler intact als je er 1 hebt)
-          return;
-        }
       } catch {
         setStatus("error");
         setConnectHint("Verbinding mislukt.");
@@ -351,6 +343,7 @@ export default function KindVerbinden() {
 
     chCam.on("broadcast", { event: "signal" }, async (payload: any) => {
       const msg = payload.payload as SignalMsg;
+
       gotAnySignalRef.current = true;
       if (waitHintTimerRef.current) {
         window.clearTimeout(waitHintTimerRef.current);
@@ -373,7 +366,6 @@ export default function KindVerbinden() {
             payload: { type: "answer", sdp: answer } satisfies SignalMsg,
           });
 
-          // camera kanaal: connected status laten we door "screen" kanaal bepalen
           return;
         }
 
@@ -382,34 +374,30 @@ export default function KindVerbinden() {
           return;
         }
       } catch {
-        // camera kanaal errors niet hard falen
+        // camera kanaal fouten negeren
       }
     });
 
-    const sub = await ch.subscribe();
-    const sub2 = await chCam.subscribe();
+    // ✅ FIX: subscribe() return type niet vergelijken met "SUBSCRIBED"
+    await ch.subscribe();
+    await chCam.subscribe();
 
-    if (sub === "SUBSCRIBED") {
-      await ch.send({
-        type: "broadcast",
-        event: "signal",
-        payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
-      });
-    }
-    if (sub2 === "SUBSCRIBED") {
-      await chCam.send({
-        type: "broadcast",
-        event: "signal",
-        payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
-      });
-    }
+    // Optional "hello" (mag ook weg); geen type-check nodig.
+    await ch.send({
+      type: "broadcast",
+      event: "signal",
+      payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
+    });
+    await chCam.send({
+      type: "broadcast",
+      event: "signal",
+      payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
+    });
   }
 
   async function disconnect() {
     await cleanup();
   }
-
-  // ====== (rest van jouw bestaande annotate/zoom/pan/etc blijft zoals hij was) ======
 
   return (
     <FullscreenShell
@@ -417,17 +405,12 @@ export default function KindVerbinden() {
         <div className="p-3 flex flex-col gap-3">
           <div className="text-sm font-semibold">Kind – verbinden</div>
 
-          {/* Active sessions (als useKoppelcode uit staat) */}
           {!useKoppelcode ? (
             <div className="rounded-xl border bg-white p-3">
               <div className="text-sm font-semibold">Actieve sessies</div>
-              <div className="text-xs text-slate-600 mt-1">
-                Kies een sessie om direct mee te kijken.
-              </div>
+              <div className="text-xs text-slate-600 mt-1">Kies een sessie om direct mee te kijken.</div>
 
-              {activeError ? (
-                <div className="mt-2 text-xs text-red-700">{activeError}</div>
-              ) : null}
+              {activeError ? <div className="mt-2 text-xs text-red-700">{activeError}</div> : null}
 
               <div className="mt-2 text-xs text-slate-600">
                 Status:{" "}
@@ -440,9 +423,7 @@ export default function KindVerbinden() {
                         ? "Verbonden"
                         : "Fout"}
                 </span>
-                {connectHint ? (
-                  <div className="mt-1 text-xs text-slate-500">{connectHint}</div>
-                ) : null}
+                {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
               </div>
 
               <div className="mt-3 flex flex-col gap-2">
@@ -454,12 +435,8 @@ export default function KindVerbinden() {
                       className="text-left rounded-xl border px-3 py-2 hover:bg-slate-50 disabled:opacity-60"
                       disabled={status === "connecting"}
                     >
-                      <div className="text-xs text-slate-500">
-                        {String(s.requester_name ?? "").trim() || "Ouder"}
-                      </div>
-                      <div className="font-semibold tracking-widest">
-                        {formatCode(s.code)}
-                      </div>
+                      <div className="text-xs text-slate-500">{String(s.requester_name ?? "").trim() || "Ouder"}</div>
+                      <div className="font-semibold tracking-widest">{formatCode(s.code)}</div>
                     </button>
                   ))
                 ) : (
@@ -476,9 +453,7 @@ export default function KindVerbinden() {
           ) : (
             <div className="rounded-xl border bg-white p-3">
               <div className="text-sm font-semibold">Sessiecode</div>
-              <div className="text-xs text-slate-600 mt-1">
-                Vul de 6-cijferige code in die je ouder/helper ziet.
-              </div>
+              <div className="text-xs text-slate-600 mt-1">Vul de 6-cijferige code in die je ouder/helper ziet.</div>
 
               <div className="mt-3 flex gap-2">
                 <Input value={formatCode(code)} onChange={(e) => setCode(e.target.value)} placeholder="123 456" />
@@ -498,9 +473,7 @@ export default function KindVerbinden() {
                         ? "Verbonden"
                         : "Fout"}
                 </span>
-                {connectHint ? (
-                  <div className="mt-1 text-xs text-slate-500">{connectHint}</div>
-                ) : null}
+                {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
               </div>
             </div>
           )}
