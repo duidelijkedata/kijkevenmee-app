@@ -434,7 +434,7 @@ export default function ShareClient({ code }: { code: string }) {
   }, [activePacketId, packets]);
 
   return (
-    <FullscreenShell>
+  <FullscreenShell sidebar={null}>
       {/* ====== NIEUW: Modal voor Telefoon camera ====== */}
       {camOpen ? (
         <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4">
