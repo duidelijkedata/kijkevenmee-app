@@ -9,8 +9,8 @@ import FullscreenShell from "@/components/meekijk/FullscreenShell";
 import ViewerStage from "@/components/meekijk/ViewerStage";
 
 type Quality = "low" | "medium" | "high";
-type DrawTool = "circle" | "rect" | "arrow";
 type ActiveSource = "screen" | "camera" | "none";
+type DrawTool = "circle" | "rect" | "arrow";
 
 type DraftShape =
   | { kind: "circle"; x: number; y: number; r: number }
@@ -20,7 +20,7 @@ type DraftShape =
 type DrawPacket = {
   id: string;
   createdAt: number;
-  snapshotJpeg: string;
+  snapshotJpeg: string; // data URL
   shapes: DraftShape[];
 };
 
@@ -32,13 +32,6 @@ type SignalMsg =
   | { type: "quality"; quality: Quality }
   | { type: "draw_packet"; packet: DrawPacket }
   | { type: "active_source"; source: ActiveSource };
-
-// camera channel messages (telefoon)
-type CamSignalMsg =
-  | { type: "hello"; at: number }
-  | { type: "offer"; sdp: any }
-  | { type: "answer"; sdp: any }
-  | { type: "ice"; candidate: any };
 
 function formatCode(v: string) {
   const digits = v.replace(/\D/g, "").slice(0, 6);
@@ -54,101 +47,110 @@ function uid() {
   return Math.random().toString(36).slice(2) + "-" + Date.now().toString(36);
 }
 
-export default function KindVerbinden() {
+export default function KindVerbindenPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
+
   const [code, setCode] = useState("");
-
-  const [useKoppelcode, setUseKoppelcode] = useState<boolean>(true);
-  const [activeSessions, setActiveSessions] = useState<{ id: string; code: string; created_at?: string }[]>([]);
-  const [activeError, setActiveError] = useState<string | null>(null);
-
-  const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
+  const [connected, setConnected] = useState(false);
+
   const [remoteQuality, setRemoteQuality] = useState<Quality | null>(null);
 
-  // ✅ actief bron-signaal vanuit ouder
-  const [activeSource, setActiveSource] = useState<ActiveSource>("screen");
-
-  // screen video
   const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  // phone camera video
-  const camVideoRef = useRef<HTMLVideoElement | null>(null);
-  const camPcRef = useRef<RTCPeerConnection | null>(null);
-  const camChannelRef = useRef<any>(null);
-
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const channelRef = useRef<any>(null);
 
+  // ✅ extra: telefoon-camera stream (direct naar kind)
+  const pcCamRef = useRef<RTCPeerConnection | null>(null);
+  const channelCamRef = useRef<any>(null);
+
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const camStreamRef = useRef<MediaStream | null>(null);
+
+  const [activeSource, setActiveSource] = useState<ActiveSource>("screen");
+  const activeSourceRef = useRef<ActiveSource>("screen");
+
   const [needsTapToPlay, setNeedsTapToPlay] = useState(false);
-  const [needsTapToPlayCam, setNeedsTapToPlayCam] = useState(false);
 
   // Zoom + pan
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const panDragRef = useRef<{ dragging: boolean; startX: number; startY: number; baseX: number; baseY: number }>({
-    dragging: false,
-    startX: 0,
-    startY: 0,
-    baseX: 0,
-    baseY: 0,
-  });
+  const [dragging, setDragging] = useState(false);
+  const dragStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
-  // Fullscreen detect
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  useEffect(() => {
-    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener("fullscreenchange", onFs);
-    return () => document.removeEventListener("fullscreenchange", onFs);
-  }, []);
+  // Hard cap op pan
+  const PAN_CAP = 800;
 
-  // Draft annotations
-  const [annotate, setAnnotate] = useState(false);
+  // Tekenen
   const [tool, setTool] = useState<DrawTool>("circle");
-  const [draft, setDraft] = useState<DraftShape[]>([]);
-  const previewRef = useRef<DraftShape | null>(null);
-  const drawDragRef = useRef<{ drawing: boolean; startNX: number; startNY: number }>({
-    drawing: false,
-    startNX: 0,
-    startNY: 0,
-  });
+  const [drawing, setDrawing] = useState(false);
+  const [draft, setDraft] = useState<DraftShape | null>(null);
+  const [shapes, setShapes] = useState<DraftShape[]>([]);
 
-  function clampPan(nextPan: { x: number; y: number }, nextZoom = zoom) {
-    const vp = viewportRef.current;
-    if (!vp) return nextPan;
+  // Snapshot queue
+  const [sending, setSending] = useState(false);
+  const sendTimerRef = useRef<any>(null);
 
-    const vpW = vp.clientWidth || 0;
-    const vpH = vp.clientHeight || 0;
-    if (!vpW || !vpH) return nextPan;
+  function applyActiveSourceToVideo(source: ActiveSource) {
+    const v = videoRef.current;
+    if (!v) return;
 
-    const scaledW = vpW * nextZoom;
-    const scaledH = vpH * nextZoom;
+    const next =
+      source === "camera"
+        ? camStreamRef.current
+        : source === "screen"
+          ? screenStreamRef.current
+          : null;
 
-    const minX = Math.min(0, vpW - scaledW);
-    const minY = Math.min(0, vpH - scaledH);
-
-    return { x: clamp(nextPan.x, minX, 0), y: clamp(nextPan.y, minY, 0) };
+    if (next) {
+      v.srcObject = next;
+      v.muted = true;
+      v.playsInline = true;
+      // @ts-ignore
+      v.disablePictureInPicture = true;
+      v.play?.().catch(() => setNeedsTapToPlay(true));
+    } else {
+      try {
+        (v as any).srcObject = null;
+      } catch {}
+    }
   }
 
-  useEffect(() => {
-    setPan((p) => clampPan(p, zoom));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoom]);
+  function setActiveSourceLocal(source: ActiveSource) {
+    activeSourceRef.current = source;
+    setActiveSource(source);
+    applyActiveSourceToVideo(source);
+  }
 
   async function cleanup() {
-    // screen pc + channel
+    // screen pc
     try {
       pcRef.current?.close();
     } catch {}
     pcRef.current = null;
 
+    // camera pc
+    try {
+      pcCamRef.current?.close();
+    } catch {}
+    pcCamRef.current = null;
+
+    // realtime channels
     try {
       if (channelRef.current) await supabase.removeChannel(channelRef.current);
     } catch {}
     channelRef.current = null;
+
+    try {
+      if (channelCamRef.current) await supabase.removeChannel(channelCamRef.current);
+    } catch {}
+    channelCamRef.current = null;
+
+    screenStreamRef.current = null;
+    camStreamRef.current = null;
 
     if (videoRef.current) {
       try {
@@ -156,29 +158,11 @@ export default function KindVerbinden() {
       } catch {}
     }
 
-    // camera pc + channel
-    try {
-      camPcRef.current?.close();
-    } catch {}
-    camPcRef.current = null;
-
-    try {
-      if (camChannelRef.current) await supabase.removeChannel(camChannelRef.current);
-    } catch {}
-    camChannelRef.current = null;
-
-    if (camVideoRef.current) {
-      try {
-        (camVideoRef.current as any).srcObject = null;
-      } catch {}
-    }
-
     setNeedsTapToPlay(false);
-    setNeedsTapToPlayCam(false);
     setConnected(false);
     setStatus("idle");
     setRemoteQuality(null);
-    setActiveSource("screen");
+    setActiveSourceLocal("screen");
   }
 
   useEffect(() => {
@@ -188,133 +172,6 @@ export default function KindVerbinden() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function refreshActiveSessions() {
-    setActiveError(null);
-    try {
-      const r = await fetch("/api/sessions/active-for-helper");
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        setActiveSessions([]);
-        setActiveError(j?.error ?? "Kan actieve sessies niet laden.");
-        return;
-      }
-      setActiveSessions(Array.isArray(j?.sessions) ? j.sessions : []);
-    } catch {
-      setActiveSessions([]);
-      setActiveError("Kan actieve sessies niet laden.");
-    }
-  }
-
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase.auth.getUser();
-      const user = data.user;
-      if (!user) return;
-
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("use_koppelcode")
-        .eq("id", user.id)
-        .maybeSingle<{ use_koppelcode: boolean | null }>();
-
-      const flag = prof?.use_koppelcode ?? true;
-      setUseKoppelcode(flag);
-
-      if (flag === false) {
-        await refreshActiveSessions();
-      } else {
-        setActiveSessions([]);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function setupCameraReceiver(raw: string) {
-    // cleanup old
-    try {
-      camPcRef.current?.close();
-    } catch {}
-    camPcRef.current = null;
-    try {
-      if (camChannelRef.current) await supabase.removeChannel(camChannelRef.current);
-    } catch {}
-    camChannelRef.current = null;
-
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-    camPcRef.current = pc;
-
-    pc.ontrack = (ev) => {
-      const [stream] = ev.streams;
-      if (!stream) return;
-      const v = camVideoRef.current;
-      if (!v) return;
-
-      setNeedsTapToPlayCam(false);
-      v.srcObject = stream;
-      v.muted = true;
-      v.playsInline = true;
-      v.disablePictureInPicture = true;
-
-      const tryPlay = async () => {
-        try {
-          await v.play();
-          setNeedsTapToPlayCam(false);
-        } catch {
-          setNeedsTapToPlayCam(true);
-        }
-      };
-      void tryPlay();
-      v.onloadedmetadata = () => void tryPlay();
-    };
-
-    const ch = supabase.channel(`signalcam:${raw}`);
-    camChannelRef.current = ch;
-
-    pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        ch.send({
-          type: "broadcast",
-          event: "signal",
-          payload: { type: "ice", candidate: e.candidate } satisfies CamSignalMsg,
-        });
-      }
-    };
-
-    ch.on("broadcast", { event: "signal" }, async (payload: any) => {
-      const msg = payload.payload as CamSignalMsg;
-
-      try {
-        if (!camPcRef.current) return;
-
-        if (msg.type === "offer") {
-          await camPcRef.current.setRemoteDescription(msg.sdp);
-          const answer = await camPcRef.current.createAnswer();
-          await camPcRef.current.setLocalDescription(answer);
-
-          await ch.send({
-            type: "broadcast",
-            event: "signal",
-            payload: { type: "answer", sdp: answer } satisfies CamSignalMsg,
-          });
-        } else if (msg.type === "ice") {
-          await camPcRef.current.addIceCandidate(msg.candidate);
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    });
-
-    ch.subscribe((st: string) => {
-      if (st === "SUBSCRIBED") {
-        ch.send({
-          type: "broadcast",
-          event: "signal",
-          payload: { type: "hello", at: Date.now() } satisfies CamSignalMsg,
-        });
-      }
-    });
-  }
-
   async function connect(rawOverride?: string) {
     const raw = String(rawOverride ?? code).replace(/\D/g, "");
     if (raw.length !== 6) return alert("Vul 6 cijfers in.");
@@ -322,11 +179,7 @@ export default function KindVerbinden() {
     await cleanup();
     setStatus("connecting");
 
-    // Setup BOTH receivers:
-    // - screen: signal:${raw}
-    // - camera: signalcam:${raw}
-    await setupCameraReceiver(raw);
-
+    // ===== Screen channel + PC =====
     const ch = supabase.channel(`signal:${raw}`);
     channelRef.current = ch;
 
@@ -339,31 +192,28 @@ export default function KindVerbinden() {
       const [stream] = ev.streams;
       if (!stream) return;
 
-      const v = videoRef.current;
-      if (!v) return;
+      screenStreamRef.current = stream;
 
-      setNeedsTapToPlay(false);
-      v.srcObject = stream;
-      v.muted = true;
-      v.playsInline = true;
-      v.disablePictureInPicture = true;
+      // als we NIET op camera staan, toon scherm
+      if (activeSourceRef.current !== "camera") {
+        const v = videoRef.current;
+        if (!v) return;
 
-      const tryPlay = async () => {
-        try {
-          await v.play();
-          setNeedsTapToPlay(false);
-        } catch {
-          setNeedsTapToPlay(true);
-        }
-      };
+        setNeedsTapToPlay(false);
 
-      void tryPlay();
-      v.onloadedmetadata = () => void tryPlay();
+        v.srcObject = stream;
+        v.muted = true;
+        v.playsInline = true;
+        // @ts-ignore
+        v.disablePictureInPicture = true;
+
+        v.play?.().catch(() => setNeedsTapToPlay(true));
+      }
     };
 
-    pc.onicecandidate = (e) => {
+    pc.onicecandidate = async (e) => {
       if (e.candidate) {
-        ch.send({
+        await ch.send({
           type: "broadcast",
           event: "signal",
           payload: { type: "ice", candidate: e.candidate } satisfies SignalMsg,
@@ -375,6 +225,12 @@ export default function KindVerbinden() {
       const msg = payload.payload as SignalMsg;
 
       try {
+        if (msg.type === "active_source") {
+          setActiveSourceLocal(msg.source);
+          return;
+        }
+
+        // de rest hoort bij screenshare pc
         if (!pcRef.current) return;
 
         if (msg.type === "offer") {
@@ -388,14 +244,27 @@ export default function KindVerbinden() {
             payload: { type: "answer", sdp: answer } satisfies SignalMsg,
           });
 
-          setStatus("connected");
           setConnected(true);
-        } else if (msg.type === "ice") {
+          setStatus("connected");
+
+          // kind zegt hallo zodat ouder evt offer opnieuw kan sturen
+          await ch.send({
+            type: "broadcast",
+            event: "signal",
+            payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
+          });
+
+          return;
+        }
+
+        if (msg.type === "ice") {
           await pcRef.current.addIceCandidate(msg.candidate);
-        } else if (msg.type === "quality") {
+          return;
+        }
+
+        if (msg.type === "quality") {
           setRemoteQuality(msg.quality);
-        } else if (msg.type === "active_source") {
-          setActiveSource(msg.source);
+          return;
         }
       } catch (e) {
         console.error(e);
@@ -403,15 +272,83 @@ export default function KindVerbinden() {
       }
     });
 
-    ch.subscribe((st: string) => {
-      if (st === "SUBSCRIBED") {
-        ch.send({
+    await ch.subscribe();
+
+    // ===== Camera channel + PC (telefoon -> kind) =====
+    const chCam = supabase.channel(`signalcam:${raw}`);
+    channelCamRef.current = chCam;
+
+    const pcCam = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+    pcCamRef.current = pcCam;
+
+    pcCam.ontrack = (ev) => {
+      const [stream] = ev.streams;
+      if (!stream) return;
+
+      camStreamRef.current = stream;
+
+      // als we WEL op camera staan, toon camera
+      if (activeSourceRef.current === "camera") {
+        const v = videoRef.current;
+        if (!v) return;
+
+        setNeedsTapToPlay(false);
+
+        v.srcObject = stream;
+        v.muted = true;
+        v.playsInline = true;
+        // @ts-ignore
+        v.disablePictureInPicture = true;
+
+        v.play?.().catch(() => setNeedsTapToPlay(true));
+      }
+    };
+
+    pcCam.onicecandidate = async (e) => {
+      if (e.candidate) {
+        await chCam.send({
           type: "broadcast",
           event: "signal",
-          payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
+          payload: { type: "ice", candidate: e.candidate } satisfies SignalMsg,
         });
       }
+    };
+
+    chCam.on("broadcast", { event: "signal" }, async (payload: any) => {
+      const msg = payload.payload as SignalMsg;
+
+      try {
+        if (!pcCamRef.current) return;
+
+        if (msg.type === "offer") {
+          await pcCamRef.current.setRemoteDescription(msg.sdp);
+          const answer = await pcCamRef.current.createAnswer();
+          await pcCamRef.current.setLocalDescription(answer);
+
+          await chCam.send({
+            type: "broadcast",
+            event: "signal",
+            payload: { type: "answer", sdp: answer } satisfies SignalMsg,
+          });
+          return;
+        }
+
+        if (msg.type === "ice") {
+          await pcCamRef.current.addIceCandidate(msg.candidate);
+          return;
+        }
+      } catch (e) {
+        console.error(e);
+        setStatus("error");
+      }
     });
+
+    await chCam.subscribe();
+
+    // default source op screen totdat ouder anders zegt
+    setActiveSourceLocal("screen");
   }
 
   async function disconnect() {
@@ -428,438 +365,323 @@ export default function KindVerbinden() {
   function zoomIn() {
     setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)));
   }
-  function resetView() {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
+
+  function onWheel(e: React.WheelEvent) {
+    e.preventDefault();
+    const delta = Math.sign(e.deltaY);
+    if (delta > 0) zoomOut();
+    else zoomIn();
   }
 
-  async function fullscreen() {
-    try {
-      const el = activeSource === "camera" ? camVideoRef.current : videoRef.current;
-      if (!el) return;
-      await (el as any).requestFullscreen?.();
-    } catch {}
-  }
-
-  function pointerToNormalized(e: React.PointerEvent) {
-    const vp = viewportRef.current;
-    if (!vp) return { nx: 0, ny: 0 };
-
-    const rect = vp.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-
-    const vpW = vp.clientWidth || 1;
-    const vpH = vp.clientHeight || 1;
-
-    const ux = (px - pan.x) / zoom;
-    const uy = (py - pan.y) / zoom;
-
-    const nx = clamp(ux / vpW, 0, 1);
-    const ny = clamp(uy / vpH, 0, 1);
-    return { nx, ny };
-  }
-
-  // Canvas render (DPR sharp)
-  useEffect(() => {
-    let raf = 0;
-
-    function resizeCanvas() {
-      const c = canvasRef.current;
-      const vp = viewportRef.current;
-      if (!c || !vp) return;
-      const w = vp.clientWidth;
-      const h = vp.clientHeight;
-      if (!w || !h) return;
-
-      const dpr = window.devicePixelRatio || 1;
-      c.width = Math.floor(w * dpr);
-      c.height = Math.floor(h * dpr);
-      c.style.width = `${w}px`;
-      c.style.height = `${h}px`;
-    }
-
-    function drawArrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number) {
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-
-      const angle = Math.atan2(y2 - y1, x2 - x1);
-      const head = 18;
-      const a1 = angle - Math.PI / 7;
-      const a2 = angle + Math.PI / 7;
-
-      ctx.beginPath();
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - head * Math.cos(a1), y2 - head * Math.sin(a1));
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - head * Math.cos(a2), y2 - head * Math.sin(a2));
-      ctx.stroke();
-    }
-
-    function loop() {
-      const c = canvasRef.current;
-      const vp = viewportRef.current;
-      if (!c || !vp) {
-        raf = requestAnimationFrame(loop);
-        return;
-      }
-
-      resizeCanvas();
-      const ctx = c.getContext("2d");
-      if (!ctx) {
-        raf = requestAnimationFrame(loop);
-        return;
-      }
-
-      const dpr = window.devicePixelRatio || 1;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      const w = vp.clientWidth;
-      const h = vp.clientHeight;
-      ctx.clearRect(0, 0, w, h);
-
-      const all = [...draft];
-      if (previewRef.current) all.push(previewRef.current);
-
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = "#60a5fa";
-      ctx.shadowColor = "rgba(0,0,0,0.35)";
-      ctx.shadowBlur = 6;
-
-      for (const s of all) {
-        if (s.kind === "circle") {
-          const tx = pan.x + s.x * w * zoom;
-          const ty = pan.y + s.y * h * zoom;
-          const r = s.r * Math.max(w, h) * zoom;
-          ctx.beginPath();
-          ctx.arc(tx, ty, r, 0, Math.PI * 2);
-          ctx.stroke();
-        } else if (s.kind === "rect") {
-          const x = pan.x + s.x * w * zoom;
-          const y = pan.y + s.y * h * zoom;
-          const rw = s.w * w * zoom;
-          const rh = s.h * h * zoom;
-          ctx.strokeRect(x, y, rw, rh);
-        } else {
-          const x1 = pan.x + s.x1 * w * zoom;
-          const y1 = pan.y + s.y1 * h * zoom;
-          const x2 = pan.x + s.x2 * w * zoom;
-          const y2 = pan.y + s.y2 * h * zoom;
-          drawArrow(ctx, x1, y1, x2, y2);
-        }
-      }
-
-      ctx.shadowBlur = 0;
-      raf = requestAnimationFrame(loop);
-    }
-
-    raf = requestAnimationFrame(loop);
-    const onResize = () => resizeCanvas();
-    window.addEventListener("resize", onResize);
-
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", onResize);
-    };
-  }, [draft, pan.x, pan.y, zoom]);
-
-  function onViewportPointerDown(e: React.PointerEvent) {
-    if (annotate) return;
+  function onMouseDown(e: React.MouseEvent) {
     if (zoom <= 1) return;
-    (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-    panDragRef.current = { dragging: true, startX: e.clientX, startY: e.clientY, baseX: pan.x, baseY: pan.y };
+    setDragging(true);
+    dragStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
   }
-  function onViewportPointerMove(e: React.PointerEvent) {
-    if (!panDragRef.current.dragging) return;
-    const dx = e.clientX - panDragRef.current.startX;
-    const dy = e.clientY - panDragRef.current.startY;
-    setPan(clampPan({ x: panDragRef.current.baseX + dx, y: panDragRef.current.baseY + dy }));
+  function onMouseMove(e: React.MouseEvent) {
+    if (!dragging || !dragStartRef.current) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+
+    const nx = clamp(dragStartRef.current.panX + dx, -PAN_CAP, PAN_CAP);
+    const ny = clamp(dragStartRef.current.panY + dy, -PAN_CAP, PAN_CAP);
+
+    setPan({ x: nx, y: ny });
   }
-  function onViewportPointerUp() {
-    panDragRef.current.dragging = false;
-  }
-
-  function onCanvasPointerDown(e: React.PointerEvent) {
-    if (!annotate || !connected) return;
-    (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-
-    const { nx, ny } = pointerToNormalized(e);
-    drawDragRef.current = { drawing: true, startNX: nx, startNY: ny };
-
-    if (tool === "circle") previewRef.current = { kind: "circle", x: nx, y: ny, r: 0.001 };
-    else if (tool === "rect") previewRef.current = { kind: "rect", x: nx, y: ny, w: 0.001, h: 0.001 };
-    else previewRef.current = { kind: "arrow", x1: nx, y1: ny, x2: nx, y2: ny };
+  function onMouseUp() {
+    setDragging(false);
+    dragStartRef.current = null;
   }
 
-  function onCanvasPointerMove(e: React.PointerEvent) {
-    if (!annotate || !drawDragRef.current.drawing) return;
-
-    const { nx, ny } = pointerToNormalized(e);
-    const startX = drawDragRef.current.startNX;
-    const startY = drawDragRef.current.startNY;
-
-    const s = previewRef.current;
-    if (!s) return;
-
-    if (s.kind === "circle") {
-      const dx = nx - startX;
-      const dy = ny - startY;
-      const r = Math.max(0.01, Math.sqrt(dx * dx + dy * dy));
-      previewRef.current = { kind: "circle", x: startX, y: startY, r };
-    } else if (s.kind === "rect") {
-      const x = Math.min(startX, nx);
-      const y = Math.min(startY, ny);
-      const w = Math.max(0.01, Math.abs(nx - startX));
-      const h = Math.max(0.01, Math.abs(ny - startY));
-      previewRef.current = { kind: "rect", x, y, w, h };
-    } else {
-      previewRef.current = { kind: "arrow", x1: startX, y1: startY, x2: nx, y2: ny };
-    }
-  }
-
-  function onCanvasPointerUp() {
-    if (!annotate || !drawDragRef.current.drawing) return;
-    drawDragRef.current.drawing = false;
-
-    const s = previewRef.current;
-    previewRef.current = null;
-    if (!s) return;
-
-    setDraft((prev) => [...prev, s]);
-  }
-
-  function captureSnapshotJpeg(): string | null {
-    const v = activeSource === "camera" ? camVideoRef.current : videoRef.current;
-    if (!v) return null;
-    const vw = v.videoWidth || 0;
-    const vh = v.videoHeight || 0;
-    if (!vw || !vh) return null;
-
-    const c = document.createElement("canvas");
-    c.width = vw;
-    c.height = vh;
-    const ctx = c.getContext("2d");
-    if (!ctx) return null;
-
-    ctx.drawImage(v, 0, 0, vw, vh);
-    return c.toDataURL("image/jpeg", 0.72);
-  }
-
-  async function shareToParent() {
+  function drawStart(e: React.MouseEvent) {
     if (!connected) return;
-    if (draft.length === 0) {
-      alert("Maak eerst een cirkel/kader/pijl en klik dan op Delen.");
-      return;
-    }
+    if (!viewportRef.current) return;
+    if (!canvasRef.current) return;
 
-    const snapshot = captureSnapshotJpeg();
-    if (!snapshot) {
-      alert("Kan nog geen snapshot maken. Wacht 1 seconde en probeer opnieuw.");
-      return;
-    }
+    const rect = viewportRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left - pan.x) / zoom;
+    const y = (e.clientY - rect.top - pan.y) / zoom;
 
-    const packet: DrawPacket = { id: uid(), createdAt: Date.now(), snapshotJpeg: snapshot, shapes: draft };
+    setDrawing(true);
+
+    if (tool === "circle") {
+      setDraft({ kind: "circle", x, y, r: 1 });
+    } else if (tool === "rect") {
+      setDraft({ kind: "rect", x, y, w: 1, h: 1 });
+    } else {
+      setDraft({ kind: "arrow", x1: x, y1: y, x2: x, y2: y });
+    }
+  }
+
+  function drawMove(e: React.MouseEvent) {
+    if (!drawing || !draft) return;
+    if (!viewportRef.current) return;
+
+    const rect = viewportRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left - pan.x) / zoom;
+    const y = (e.clientY - rect.top - pan.y) / zoom;
+
+    if (draft.kind === "circle") {
+      const r = Math.max(2, Math.hypot(x - draft.x, y - draft.y));
+      setDraft({ ...draft, r });
+    } else if (draft.kind === "rect") {
+      setDraft({ ...draft, w: x - draft.x, h: y - draft.y });
+    } else if (draft.kind === "arrow") {
+      setDraft({ ...draft, x2: x, y2: y });
+    }
+  }
+
+  function drawEnd() {
+    if (!drawing) return;
+    setDrawing(false);
+    if (draft) {
+      setShapes((prev) => [...prev, draft]);
+      setDraft(null);
+      scheduleSend();
+    }
+  }
+
+  function clearShapes() {
+    setShapes([]);
+    setDraft(null);
+  }
+
+  async function sendPacketNow() {
+    if (!channelRef.current) return;
+    if (!videoRef.current) return;
+
+    if (sending) return;
+    setSending(true);
 
     try {
-      await channelRef.current?.send({
+      const v = videoRef.current;
+      const canvas = document.createElement("canvas");
+
+      const w = Math.max(320, Math.min(1280, v.videoWidth || 1280));
+      const h = Math.max(240, Math.min(720, v.videoHeight || 720));
+
+      canvas.width = w;
+      canvas.height = h;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      ctx.drawImage(v, 0, 0, w, h);
+
+      const snapshotJpeg = canvas.toDataURL("image/jpeg", 0.65);
+
+      const packet: DrawPacket = {
+        id: uid(),
+        createdAt: Date.now(),
+        snapshotJpeg,
+        shapes: shapes.slice(),
+      };
+
+      await channelRef.current.send({
         type: "broadcast",
         event: "signal",
         payload: { type: "draw_packet", packet } satisfies SignalMsg,
       });
-
-      setDraft([]);
-      previewRef.current = null;
-    } catch {
-      alert("Delen mislukt. Probeer opnieuw.");
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSending(false);
     }
   }
 
-  const raw = code.replace(/\D/g, "");
-  const canConnect = raw.length === 6;
+  function scheduleSend() {
+    if (sendTimerRef.current) clearTimeout(sendTimerRef.current);
+    sendTimerRef.current = setTimeout(() => {
+      void sendPacketNow();
+    }, 220);
+  }
 
-  // ========== UI ==========
-  return (
-    <FullscreenShell
-      sidebar={
-        <div className="p-4 space-y-3">
-          <div className="text-sm font-semibold">Kind – verbinden</div>
+  useEffect(() => {
+    // overlay canvas tekenen
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
-          {useKoppelcode ? (
-            <>
-              <div className="text-xs text-slate-600">
-                Vul de 6-cijferige code in die je van je ouder hebt gekregen.
-              </div>
-
-              <Input value={formatCode(code)} onChange={(e) => setCode(e.target.value)} placeholder="123 456" />
-
-              <div className="flex gap-2">
-                <Button variant="primary" onClick={() => connect()} disabled={!canConnect || status === "connecting"} className="flex-1">
-                  Verbinden
-                </Button>
-                <Button onClick={disconnect} disabled={status === "idle"} className="w-28">
-                  Stop
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="text-xs text-slate-600">Actieve sessies die al aan jou zijn toegewezen:</div>
-              {activeError ? <div className="text-xs text-red-600">{activeError}</div> : null}
-              <div className="space-y-2">
-                {activeSessions.map((s) => (
-                  <Button key={s.id} onClick={() => connect(s.code)} className="w-full">
-                    Meekijken: {s.code}
-                  </Button>
-                ))}
-                {activeSessions.length === 0 ? <div className="text-xs text-slate-500">Geen actieve sessies.</div> : null}
-              </div>
-
-              <div className="pt-2">
-                <Button onClick={refreshActiveSessions} className="w-full">
-                  Vernieuwen
-                </Button>
-              </div>
-            </>
-          )}
-
-          <div className="pt-2 text-xs text-slate-600">
-            Status: <span className="font-semibold">{status}</span>
-          </div>
-
-          <div className="text-xs text-slate-600">
-            Ouder toont:{" "}
-            <span className="font-semibold">
-              {activeSource === "camera" ? "Telefoon" : activeSource === "screen" ? "Scherm" : "Niets"}
-            </span>
-          </div>
-
-          {remoteQuality ? (
-            <div className="text-xs text-slate-600">
-              Kwaliteit: <span className="font-semibold">{remoteQuality}</span>
-            </div>
-          ) : null}
-
-          <div className="pt-2 flex gap-2 flex-wrap">
-            <Button onClick={zoomOut} disabled={zoom <= 1}>
-              −
-            </Button>
-            <Button onClick={zoomIn} disabled={zoom >= 3}>
-              +
-            </Button>
-            <Button onClick={resetView} disabled={zoom === 1 && pan.x === 0 && pan.y === 0}>
-              Reset
-            </Button>
-            <Button onClick={fullscreen} className="ml-auto">
-              Fullscreen
-            </Button>
-          </div>
-
-          <div className="pt-2 rounded-xl border p-3">
-            <div className="text-xs font-semibold">Aanwijzen / tekenen</div>
-            <label className="mt-2 flex items-center gap-2 text-xs">
-              <input type="checkbox" checked={annotate} onChange={(e) => setAnnotate(e.target.checked)} />
-              Aan
-            </label>
-
-            <div className="mt-2 flex gap-2">
-              <Button onClick={() => setTool("circle")} variant={tool === "circle" ? "primary" : "secondary"}>
-                Cirkel
-              </Button>
-              <Button onClick={() => setTool("rect")} variant={tool === "rect" ? "primary" : "secondary"}>
-                Kader
-              </Button>
-              <Button onClick={() => setTool("arrow")} variant={tool === "arrow" ? "primary" : "secondary"}>
-                Pijl
-              </Button>
-            </div>
-
-            <div className="mt-3 flex gap-2">
-              <Button onClick={shareToParent} disabled={!connected || draft.length === 0} className="flex-1" variant="primary">
-                Delen
-              </Button>
-              <Button onClick={() => setDraft([])} disabled={draft.length === 0} className="w-28">
-                Reset
-              </Button>
-            </div>
-
-            <div className="mt-2 text-[11px] text-slate-500">
-              Tip: zoom in om precies te tekenen. Pan werkt alleen als annotatie uit staat.
-            </div>
-          </div>
-        </div>
+    const draw = () => {
+      const v = videoRef.current;
+      const vp = viewportRef.current;
+      if (!v || !vp) {
+        requestAnimationFrame(draw);
+        return;
       }
-    >
+
+      const rect = vp.getBoundingClientRect();
+      const cw = Math.max(1, Math.floor(rect.width));
+      const ch = Math.max(1, Math.floor(rect.height));
+
+      if (canvas.width !== cw) canvas.width = cw;
+      if (canvas.height !== ch) canvas.height = ch;
+
+      ctx.clearRect(0, 0, cw, ch);
+
+      ctx.save();
+      ctx.translate(pan.x, pan.y);
+      ctx.scale(zoom, zoom);
+
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = "#ff3b30";
+      ctx.fillStyle = "rgba(255,59,48,0.15)";
+
+      const list = [...shapes, ...(draft ? [draft] : [])];
+      for (const s of list) {
+        if (s.kind === "circle") {
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        } else if (s.kind === "rect") {
+          ctx.beginPath();
+          ctx.rect(s.x, s.y, s.w, s.h);
+          ctx.fill();
+          ctx.stroke();
+        } else if (s.kind === "arrow") {
+          const { x1, y1, x2, y2 } = s;
+          const head = 18;
+          const angle = Math.atan2(y2 - y1, x2 - x1);
+
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(x2, y2);
+          ctx.lineTo(x2 - head * Math.cos(angle - Math.PI / 6), y2 - head * Math.sin(angle - Math.PI / 6));
+          ctx.lineTo(x2 - head * Math.cos(angle + Math.PI / 6), y2 - head * Math.sin(angle + Math.PI / 6));
+          ctx.closePath();
+          ctx.fillStyle = "#ff3b30";
+          ctx.fill();
+          ctx.fillStyle = "rgba(255,59,48,0.15)";
+        }
+      }
+
+      ctx.restore();
+
+      requestAnimationFrame(draw);
+    };
+
+    draw();
+  }, [zoom, pan, shapes, draft]);
+
+  return (
+    <FullscreenShell sidebar={null}>
       <div className="h-screen w-screen bg-black">
         <ViewerStage>
-          <div className="h-full w-full">
-            {/* Groot meekijk vlak (zelfde plek voor screen of camera) */}
-            <div
-              ref={viewportRef}
-              className="relative h-full w-full overflow-hidden bg-black"
-              onPointerDown={onViewportPointerDown}
-              onPointerMove={onViewportPointerMove}
-              onPointerUp={onViewportPointerUp}
-              onPointerCancel={onViewportPointerUp}
-            >
-              {/* Screen video */}
-              <video
-                ref={videoRef}
-                className={`absolute inset-0 h-full w-full ${activeSource === "screen" ? "block" : "hidden"}`}
-                style={{
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                  transformOrigin: "top left",
-                }}
-              />
+          <div className="h-full w-full grid grid-cols-1 lg:grid-cols-[360px_1fr]">
+            {/* LEFT */}
+            <div className="min-w-0 border-b lg:border-b-0 lg:border-r border-white/10">
+              <div className="p-3 flex flex-col gap-3">
+                <div className="text-white text-sm font-semibold">Kind – meekijken</div>
 
-              {/* Camera video */}
-              <video
-                ref={camVideoRef}
-                className={`absolute inset-0 h-full w-full ${activeSource === "camera" ? "block" : "hidden"}`}
-                style={{
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                  transformOrigin: "top left",
-                  objectFit: "cover",
-                }}
-              />
-
-              {/* Placeholder */}
-              {activeSource === "none" ? (
-                <div className="absolute inset-0 flex items-center justify-center text-white/70 text-sm">
-                  Geen actieve bron. Vraag je ouder om scherm of telefoon te tonen.
+                <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
+                  <div className="text-xs opacity-80 mb-2">Koppelcode</div>
+                  <Input value={code} onChange={(e) => setCode(formatCode(e.target.value))} placeholder="123 456" />
+                  <div className="mt-2 flex gap-2">
+                    <Button
+                      variant="primary"
+                      onClick={() => void connect()}
+                      disabled={status === "connecting" || connected}
+                      className="flex-1"
+                    >
+                      Verbinden
+                    </Button>
+                    <Button onClick={() => void disconnect()} disabled={status === "connecting"} className="w-28">
+                      Stop
+                    </Button>
+                  </div>
+                  <div className="mt-2 text-xs opacity-80">
+                    Status:{" "}
+                    <span className="font-semibold">
+                      {status === "connecting" ? "Verbinden…" : status === "connected" ? "Verbonden" : status === "error" ? "Fout" : "Idle"}
+                    </span>
+                  </div>
+                  {remoteQuality ? (
+                    <div className="mt-1 text-xs opacity-80">Ouder kwaliteit: <span className="font-semibold">{remoteQuality}</span></div>
+                  ) : null}
+                  <div className="mt-1 text-xs opacity-80">
+                    Bron:{" "}
+                    <span className="font-semibold">
+                      {activeSource === "camera" ? "Telefoon" : activeSource === "screen" ? "PC-scherm" : "Niets"}
+                    </span>
+                  </div>
                 </div>
-              ) : null}
 
-              {/* Tap to play overlay (iOS) */}
-              {needsTapToPlay && activeSource === "screen" ? (
-                <button
-                  onClick={() => videoRef.current?.play?.().catch(() => {})}
-                  className="absolute inset-0 flex items-center justify-center bg-black/40 text-white text-sm"
-                >
-                  Tik om video te starten
-                </button>
-              ) : null}
+                <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
+                  <div className="font-semibold">Tekenen</div>
+                  <div className="mt-2 flex gap-2 flex-wrap">
+                    <Button variant={tool === "circle" ? "primary" : "secondary"} onClick={() => setTool("circle")}>
+                      Cirkel
+                    </Button>
+                    <Button variant={tool === "rect" ? "primary" : "secondary"} onClick={() => setTool("rect")}>
+                      Rechthoek
+                    </Button>
+                    <Button variant={tool === "arrow" ? "primary" : "secondary"} onClick={() => setTool("arrow")}>
+                      Pijl
+                    </Button>
+                    <Button onClick={clearShapes}>Wissen</Button>
+                  </div>
 
-              {needsTapToPlayCam && activeSource === "camera" ? (
-                <button
-                  onClick={() => camVideoRef.current?.play?.().catch(() => {})}
-                  className="absolute inset-0 flex items-center justify-center bg-black/40 text-white text-sm"
-                >
-                  Tik om camera te starten
-                </button>
-              ) : null}
+                  {needsTapToPlay ? (
+                    <div className="mt-3 rounded-xl border border-white/20 bg-white/5 p-3 text-xs">
+                      Video play blocked. Tik op de video om te starten.
+                    </div>
+                  ) : null}
+                </div>
 
-              {/* Annotation canvas */}
-              <canvas
-                ref={canvasRef}
-                className="absolute inset-0"
-                onPointerDown={onCanvasPointerDown}
-                onPointerMove={onCanvasPointerMove}
-                onPointerUp={onCanvasPointerUp}
-                onPointerCancel={onCanvasPointerUp}
-                style={{ touchAction: "none" }}
-              />
+                <div className="rounded-xl bg-white/10 p-3 text-white text-xs opacity-80">
+                  Zoom: {zoom.toFixed(2)} • Pan cap: {PAN_CAP}px
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT (video) */}
+            <div className="min-w-0">
+              <div
+                ref={viewportRef}
+                className="relative h-full w-full flex items-center justify-center overflow-hidden bg-black"
+                onWheel={onWheel}
+                onMouseDown={(e) => {
+                  if (tool) drawStart(e);
+                }}
+                onMouseMove={(e) => {
+                  drawMove(e);
+                  onMouseMove(e);
+                }}
+                onMouseUp={() => {
+                  drawEnd();
+                  onMouseUp();
+                }}
+                onMouseLeave={() => {
+                  drawEnd();
+                  onMouseUp();
+                }}
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                <div
+                  className="absolute inset-0"
+                  onMouseDown={onMouseDown}
+                  onMouseMove={onMouseMove}
+                  onMouseUp={onMouseUp}
+                />
+
+                <video
+                  ref={videoRef}
+                  className="max-h-full max-w-full select-none"
+                  onClick={() => {
+                    if (!videoRef.current) return;
+                    videoRef.current.play?.().catch(() => {});
+                    setNeedsTapToPlay(false);
+                  }}
+                />
+
+                <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none" />
+              </div>
             </div>
           </div>
         </ViewerStage>
