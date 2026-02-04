@@ -35,6 +35,9 @@ export default function OuderCameraPage() {
   const camChannelRef = useRef<any>(null); // signalcam:${code}
   const mainChannelRef = useRef<any>(null); // signal:${code}
 
+  // ✅ throttle voor active_source refresh
+  const lastCameraActivePingRef = useRef<number>(0);
+
   useEffect(() => {
     const u = new URL(window.location.href);
     const t = u.searchParams.get("token") || "";
@@ -48,10 +51,22 @@ export default function OuderCameraPage() {
     previewTimerRef.current = null;
   }
 
+  async function broadcastActiveSource(source: ActiveSource) {
+    const main = mainChannelRef.current;
+    if (!main) return;
+
+    await main.send({
+      type: "broadcast",
+      event: "signal",
+      payload: { type: "active_source", source } satisfies MainSignalMsg,
+    });
+  }
+
   function sendCamPreview(jpeg: string) {
     const main = mainChannelRef.current;
     if (!main) return;
 
+    // 1) preview frame
     main
       .send({
         type: "broadcast",
@@ -59,12 +74,24 @@ export default function OuderCameraPage() {
         payload: { type: "cam_preview", jpeg, at: Date.now() } satisfies MainSignalMsg,
       })
       .catch(() => {});
+
+    // 2) ✅ elke ~2s ook active_source=camera “refreshen”
+    const now = Date.now();
+    if (now - lastCameraActivePingRef.current > 2000) {
+      lastCameraActivePingRef.current = now;
+      main
+        .send({
+          type: "broadcast",
+          event: "signal",
+          payload: { type: "active_source", source: "camera" } satisfies MainSignalMsg,
+        })
+        .catch(() => {});
+    }
   }
 
   function startPreviewLoop() {
     stopPreviewLoop();
 
-    // ~2 fps is genoeg voor overlay preview zonder Supabase te spammen
     previewTimerRef.current = setInterval(() => {
       const v = videoPreviewRef.current;
       const c = previewCanvasRef.current;
@@ -98,17 +125,6 @@ export default function OuderCameraPage() {
     }, 500);
   }
 
-  async function broadcastActiveSource(source: ActiveSource) {
-    const main = mainChannelRef.current;
-    if (!main) return;
-
-    await main.send({
-      type: "broadcast",
-      event: "signal",
-      payload: { type: "active_source", source } satisfies MainSignalMsg,
-    });
-  }
-
   async function stop(sendBackToScreen: boolean = true) {
     stopPreviewLoop();
 
@@ -139,8 +155,6 @@ export default function OuderCameraPage() {
   }
 
   async function resolveTokenToCode(t: string): Promise<string> {
-    // We proberen meerdere endpoints omdat jouw project history laat zien
-    // dat deze route-namen vaker verschuiven.
     const candidates: Array<{ url: string; parse: (json: any) => string | null }> = [
       {
         url: `/api/support/camera/validatie?token=${encodeURIComponent(t)}`,
@@ -155,7 +169,6 @@ export default function OuderCameraPage() {
         parse: (j) => (typeof j?.code === "string" ? j.code : null),
       },
       {
-        // sommige varianten returnen { support_code: ... }
         url: `/api/support/camera-token/${encodeURIComponent(t)}`,
         parse: (j) => (typeof j?.support_code === "string" ? j.support_code : null),
       },
@@ -185,7 +198,6 @@ export default function OuderCameraPage() {
     throw new Error(lastErr || "Kon token niet valideren.");
   }
 
-  // Resolve token -> support code
   useEffect(() => {
     if (!token) return;
 
@@ -206,7 +218,6 @@ export default function OuderCameraPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  // Setup realtime channels zodra code bekend is
   useEffect(() => {
     if (!code) return;
 
@@ -259,8 +270,8 @@ export default function OuderCameraPage() {
 
     setErrorText("");
     setStatus("connecting");
+    lastCameraActivePingRef.current = 0;
 
-    // opruimen oude stream/pc (zonder actief terug te switchen naar screen)
     await stop(false);
     setStatus("connecting");
 
@@ -297,7 +308,6 @@ export default function OuderCameraPage() {
 
       pc.addTrack(track, stream);
 
-      // lokale preview
       if (videoPreviewRef.current) {
         videoPreviewRef.current.srcObject = stream;
         videoPreviewRef.current.muted = true;
@@ -305,10 +315,10 @@ export default function OuderCameraPage() {
         await videoPreviewRef.current.play().catch(() => {});
       }
 
-      // ✅ start overlay preview stream
+      // Preview loop start
       startPreviewLoop();
 
-      // ✅ pas NU switchen we het kind naar de telefoonbron
+      // Direct switch to camera once started
       try {
         await broadcastActiveSource("camera");
       } catch {}

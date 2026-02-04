@@ -90,11 +90,18 @@ export default function ShareClient({ code }: { code: string }) {
   const [camPreviewJpeg, setCamPreviewJpeg] = useState<string>("");
   const [camPreviewAt, setCamPreviewAt] = useState<number>(0);
 
-  // ✅ belangrijk: overlay pas "live" zodra we echt frames ontvangen
+  // overlay is live zodra we echt frames ontvangen
   const [camLive, setCamLive] = useState<boolean>(false);
-
-  // overlay is live als camLive true is (dus telefoon heeft “Start camera” gedrukt)
   const phoneIsLive = camLive;
+
+  // ✅ helper: "telefoon is *nu* live" (dus geen QR nodig)
+  function phoneIsLiveNow() {
+    if (!camLive) return false;
+    if (!camPreviewAt) return false;
+    const age = Date.now() - camPreviewAt;
+    // preview komt op telefoon ~2fps; als we < 4s oud zijn is hij vrijwel zeker nog live
+    return age < 4000;
+  }
 
   async function broadcastActiveSource(source: ActiveSource) {
     setActiveSource(source);
@@ -165,7 +172,7 @@ export default function ShareClient({ code }: { code: string }) {
         if (msg.type === "cam_preview") {
           setCamPreviewJpeg(msg.jpeg);
           setCamPreviewAt(msg.at || Date.now());
-          setCamLive(true); // ✅ pas nu wordt overlay "live"
+          setCamLive(true);
           return;
         }
 
@@ -461,6 +468,8 @@ export default function ShareClient({ code }: { code: string }) {
     await broadcastActiveSource("screen");
     setCamOpen(false);
 
+    // We resetten overlay state; telefoon kan nog live blijven en zal meteen weer previews sturen,
+    // maar dat is ok — die previews zetten camLive/camPreview weer aan.
     setCamLive(false);
     setCamPreviewJpeg("");
     setCamPreviewAt(0);
@@ -492,7 +501,6 @@ export default function ShareClient({ code }: { code: string }) {
               </button>
             </div>
 
-            {/* Live-mode: alleen preview + stop */}
             {phoneIsLive ? (
               <div className="mt-4 rounded-2xl border bg-slate-50 p-3">
                 <div className="text-xs text-slate-600 mb-2 flex items-center justify-between">
@@ -527,7 +535,6 @@ export default function ShareClient({ code }: { code: string }) {
               </div>
             ) : (
               <>
-                {/* QR/link-mode */}
                 <div className="mt-4">
                   {!camLink ? (
                     <div className="flex items-center justify-between gap-3">
@@ -610,18 +617,30 @@ export default function ShareClient({ code }: { code: string }) {
 
                   <Button
                     onClick={async () => {
-                      // reset zodat je altijd eerst QR ziet
-                      setCamLive(false);
-                      setCamPreviewJpeg("");
-                      setCamPreviewAt(0);
+                      // ✅ NEW: als telefoon al live is (preview recent), dan meteen switch naar camera.
+                      // Anders: klassieke flow -> QR tonen en kind blijft screen zien.
+                      const liveNow = phoneIsLiveNow();
+
+                      if (!liveNow) {
+                        // reset zodat je altijd eerst QR ziet
+                        setCamLive(false);
+                        setCamPreviewJpeg("");
+                        setCamPreviewAt(0);
+                        setCamError("");
+                        setCamLink("");
+                        setCamLoading(false);
+                      } else {
+                        // live -> geen reset; we willen juist direct “camera” activeren
+                        setCamError("");
+                      }
 
                       setCamOpen(true);
-                      setCamError("");
-                      setCamLink("");
-                      setCamLoading(false);
 
-                      // ✅ FIX: kind blijft PC zien (met QR overlay). Telefoonpagina zet later pas 'camera' zodra hij echt start.
-                      await broadcastActiveSource("screen");
+                      if (liveNow) {
+                        await broadcastActiveSource("camera");
+                      } else {
+                        await broadcastActiveSource("screen");
+                      }
                     }}
                   >
                     Telefoon als camera
@@ -690,9 +709,7 @@ export default function ShareClient({ code }: { code: string }) {
                           key={p.id}
                           onClick={() => setActivePacketId(p.id)}
                           className={`text-left rounded-xl border px-3 py-2 ${
-                            p.id === activePacketId
-                              ? "bg-white text-black"
-                              : "bg-transparent text-white/90 border-white/20"
+                            p.id === activePacketId ? "bg-white text-black" : "bg-transparent text-white/90 border-white/20"
                           }`}
                         >
                           <div className="text-xs opacity-80">
