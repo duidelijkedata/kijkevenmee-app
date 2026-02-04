@@ -649,23 +649,15 @@ export default function ShareClient({ code }: { code: string }) {
 
               {/* RIGHT: Live camera preview */}
               <div className="rounded-xl border bg-slate-50 p-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium">Live camera</div>
-                  <div className="flex gap-2">
-                    <Button
-                      onClick={() => startCameraReceiver()}
-                      className="h-9"
-                    >
-                      Herstart
-                    </Button>
-                    <Button
-                      onClick={() => stopCameraReceiver()}
-                      className="h-9"
-                    >
-                      Stop
-                    </Button>
-                  </div>
-                </div>
+             <div className="flex items-center justify-between">
+  <div className="text-sm font-medium">Live camera</div>
+  <div className="flex gap-2">
+    <Button onClick={() => stopCameraReceiver()} className="h-9">
+      Stop
+    </Button>
+  </div>
+</div>
+
 
                 <div className="mt-2 text-xs text-slate-600">
                   Status:{" "}
