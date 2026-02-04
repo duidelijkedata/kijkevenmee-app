@@ -12,6 +12,12 @@ type LinkedChild = {
   use_koppelcode: boolean;
 };
 
+type RelatedUser = {
+  id: string;
+  display_name?: string | null;
+  use_koppelcode?: boolean | null;
+};
+
 export default function OuderStart() {
   const router = useRouter();
   const supabase = useMemo(() => supabaseBrowser(), []);
@@ -37,7 +43,9 @@ export default function OuderStart() {
         .select("child_id")
         .eq("helper_id", uid);
 
-      const childIds = (rels ?? []).map((r: any) => r.child_id).filter(Boolean) as string[];
+      const childIds = (rels ?? [])
+        .map((r: any) => r.child_id)
+        .filter(Boolean) as string[];
       if (!childIds.length) return;
 
       const r = await fetch("/api/related-users", {
@@ -49,14 +57,17 @@ export default function OuderStart() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) return;
 
-      const users = Array.isArray(j?.users) ? j.users : [];
-      const byId = new Map(users.map((u: any) => [u.id, u]));
+      const users: RelatedUser[] = Array.isArray(j?.users) ? (j.users as RelatedUser[]) : [];
+      const byId = new Map<string, RelatedUser>(users.map((u) => [u.id, u]));
 
       const mapped: LinkedChild[] = childIds
         .map((id) => {
           const u = byId.get(id);
           if (!u) return null;
-          const label = String(u.display_name || "").trim() || `Kind ${String(id).slice(0, 8)}…`;
+
+          const label =
+            String(u.display_name ?? "").trim() || `Kind ${String(id).slice(0, 8)}…`;
+
           return {
             id,
             label,
