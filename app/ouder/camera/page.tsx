@@ -4,30 +4,33 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card } from "@/components/ui";
 import { supabaseBrowser } from "@/lib/supabase/browser";
 
+type ActiveSource = "screen" | "camera";
+
 type SignalMsg =
   | { type: "hello"; at: number }
   | { type: "offer"; sdp: any }
   | { type: "answer"; sdp: any }
   | { type: "ice"; candidate: any };
 
-type PreviewMsg = { type: "cam_preview"; jpeg: string; at: number };
+type MainSignalMsg = { type: "active_source"; source: ActiveSource };
 
 export default function OuderCameraPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [status, setStatus] = useState<"idle" | "resolving" | "ready" | "connecting" | "connected" | "error">("idle");
   const [errorText, setErrorText] = useState<string>("");
+
   const [code, setCode] = useState<string>("");
   const [token, setToken] = useState<string>("");
 
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
-  const channelRef = useRef<any>(null);
 
-  // extra channel voor preview frames → ouder overlay (signal:${code})
-  const previewChannelRef = useRef<any>(null);
-  const previewTimerRef = useRef<any>(null);
-  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+
+  // camera signaling kanaal
+  const channelRef = useRef<any>(null);
+  // hoofd-kanaal voor active_source switch
+  const mainChannelRef = useRef<any>(null);
 
   useEffect(() => {
     const u = new URL(window.location.href);
@@ -44,7 +47,8 @@ export default function OuderCameraPage() {
       setErrorText("");
 
       try {
-        const res = await fetch(`/api/support/camera-token/${encodeURIComponent(token)}`, { method: "GET" });
+        // Let op: dit endpoint moet bestaan in jouw app (jij hebt ‘m al werkend gekregen)
+        const res = await fetch(`/api/support/camera/validatie?token=${encodeURIComponent(token)}`, { method: "GET" });
         const json = await res.json();
 
         if (!res.ok) {
@@ -55,17 +59,18 @@ export default function OuderCameraPage() {
 
         setCode(json.code);
         setStatus("ready");
-      } catch (e: any) {
+      } catch {
         setStatus("error");
         setErrorText("Netwerkfout bij token validatie.");
       }
     })();
   }, [token]);
 
-  // Setup realtime channel (camera signaling)
+  // Setup realtime channels
   useEffect(() => {
     if (!code) return;
 
+    // Camera signaling (WebRTC)
     const ch = supabase.channel(`signalcam:${code}`);
     channelRef.current = ch;
 
@@ -93,89 +98,26 @@ export default function OuderCameraPage() {
       }
     });
 
+    // Hoofd kanaal om active_source te sturen (geen listener nodig)
+    const main = supabase.channel(`signal:${code}`);
+    mainChannelRef.current = main;
+
     ch.subscribe();
+    main.subscribe();
 
     return () => {
       try {
         supabase.removeChannel(ch);
       } catch {}
-    };
-  }, [supabase, code]);
-
-  // Setup preview broadcast channel
-  useEffect(() => {
-    if (!code) return;
-
-    const ch = supabase.channel(`signal:${code}`);
-    previewChannelRef.current = ch;
-    ch.subscribe();
-
-    return () => {
       try {
-        supabase.removeChannel(ch);
+        supabase.removeChannel(main);
       } catch {}
-      previewChannelRef.current = null;
+      channelRef.current = null;
+      mainChannelRef.current = null;
     };
   }, [supabase, code]);
-
-  function stopPreviewLoop() {
-    if (previewTimerRef.current) {
-      clearInterval(previewTimerRef.current);
-      previewTimerRef.current = null;
-    }
-  }
-
-  function startPreviewLoop() {
-    stopPreviewLoop();
-
-    // 1 fps is genoeg voor “wat ziet het kind”
-    previewTimerRef.current = setInterval(async () => {
-      try {
-        const v = videoPreviewRef.current;
-        const ch = previewChannelRef.current;
-        if (!v || !ch) return;
-        if (v.readyState < 2) return;
-
-        let canvas = previewCanvasRef.current;
-        if (!canvas) {
-          canvas = document.createElement("canvas");
-          previewCanvasRef.current = canvas;
-        }
-
-        // kleine preview: 360px breed (scheelt data)
-        const targetW = 360;
-        const vw = v.videoWidth || 1280;
-        const vh = v.videoHeight || 720;
-        if (!vw || !vh) return;
-
-        const scale = targetW / vw;
-        const targetH = Math.round(vh * scale);
-
-        canvas.width = targetW;
-        canvas.height = targetH;
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        ctx.drawImage(v, 0, 0, targetW, targetH);
-
-        const jpeg = canvas.toDataURL("image/jpeg", 0.6);
-        const pkt: PreviewMsg = { type: "cam_preview", jpeg, at: Date.now() };
-
-        await ch.send({
-          type: "broadcast",
-          event: "signal",
-          payload: pkt,
-        });
-      } catch {
-        // silent
-      }
-    }, 1000);
-  }
 
   async function stop() {
-    stopPreviewLoop();
-
     try {
       pcRef.current?.close();
     } catch {}
@@ -196,13 +138,29 @@ export default function OuderCameraPage() {
     setErrorText("");
   }
 
+  async function broadcastActiveSource(source: ActiveSource) {
+    const main = mainChannelRef.current;
+    if (!main) return;
+    try {
+      await main.send({
+        type: "broadcast",
+        event: "signal",
+        payload: { type: "active_source", source } satisfies MainSignalMsg,
+      });
+    } catch (e) {
+      // niet fatal; camera kan nog steeds streamen, maar kind switcht dan niet
+      console.warn("broadcastActiveSource failed", e);
+    }
+  }
+
   async function startCamera() {
     if (!code) return;
 
-    setStatus("connecting");
     setErrorText("");
 
+    // Eerst opruimen (oude pc/stream), daarna status
     await stop();
+    setStatus("connecting");
 
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -221,14 +179,19 @@ export default function OuderCameraPage() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 30 },
+        },
         audio: false,
       });
 
       streamRef.current = stream;
 
       const track = stream.getVideoTracks()[0];
-      track.addEventListener("ended", () => stop());
+      track.addEventListener("ended", () => void stop());
 
       pc.addTrack(track, stream);
 
@@ -240,8 +203,8 @@ export default function OuderCameraPage() {
         await videoPreviewRef.current.play().catch(() => {});
       }
 
-      // ✅ start preview loop (naar ouder overlay)
-      startPreviewLoop();
+      // ✅ BELANGRIJK: PAS NU schakelen we het kind over naar telefoon
+      await broadcastActiveSource("camera");
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -252,12 +215,14 @@ export default function OuderCameraPage() {
         payload: { type: "offer", sdp: offer } satisfies SignalMsg,
       });
 
+      // “hello” helpt bij later subscriben
       await channelRef.current?.send({
         type: "broadcast",
         event: "signal",
         payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
       });
 
+      // status blijft connecting tot answer binnen is
       setStatus("connecting");
     } catch (e: any) {
       console.error(e);
@@ -304,14 +269,14 @@ export default function OuderCameraPage() {
               {status === "resolving"
                 ? "Koppelen…"
                 : status === "ready"
-                  ? "Klaar"
-                  : status === "connecting"
-                    ? "Verbinden…"
-                    : status === "connected"
-                      ? "Verbonden"
-                      : status === "error"
-                        ? "Fout"
-                        : "Idle"}
+                ? "Klaar"
+                : status === "connecting"
+                ? "Verbinden…"
+                : status === "connected"
+                ? "Verbonden"
+                : status === "error"
+                ? "Fout"
+                : "Idle"}
             </span>
           </div>
 
