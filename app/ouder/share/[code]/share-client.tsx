@@ -29,6 +29,12 @@ type SignalMsg =
   | { type: "quality"; quality: Quality }
   | { type: "draw_packet"; packet: DrawPacket };
 
+type CamSignalMsg =
+  | { type: "hello"; at: number }
+  | { type: "offer"; sdp: any }
+  | { type: "answer"; sdp: any }
+  | { type: "ice"; candidate: any };
+
 type PacketState = DrawPacket & { seen: boolean };
 
 function qualityLabel(q: Quality) {
@@ -85,11 +91,18 @@ export default function ShareClient({ code }: { code: string }) {
       ? window.location.origin
       : "https://kijkevenmee-app.vercel.app";
 
-  // ====== NIEUW: telefoon camera modal state ======
+  // ====== Telefoon camera modal state ======
   const [camOpen, setCamOpen] = useState(false);
   const [camLoading, setCamLoading] = useState(false);
   const [camError, setCamError] = useState<string>("");
   const [camLink, setCamLink] = useState<string>("");
+
+  // ====== Telefoon camera receiver state ======
+  const camVideoRef = useRef<HTMLVideoElement | null>(null);
+  const camPcRef = useRef<RTCPeerConnection | null>(null);
+  const camChRef = useRef<any>(null);
+  const [camStatus, setCamStatus] = useState<"idle" | "waiting" | "connecting" | "connected" | "error">("idle");
+  const [camStatusText, setCamStatusText] = useState<string>("");
 
   function qrUrl(data: string) {
     const size = "240x240";
@@ -114,6 +127,10 @@ export default function ShareClient({ code }: { code: string }) {
       const url = `${origin}/ouder/camera?token=${encodeURIComponent(json.token)}`;
       setCamLink(url);
       setCamLoading(false);
+
+      // zodra we een link hebben: ga alvast luisteren naar signalcam
+      // (telefoon kan later pas starten)
+      await startCameraReceiver();
     } catch (e) {
       setCamError("Netwerkfout bij aanmaken telefoon-link.");
       setCamLoading(false);
@@ -125,6 +142,136 @@ export default function ShareClient({ code }: { code: string }) {
       await navigator.clipboard.writeText(text);
     } catch {}
   }
+
+  // ====== Camera receiver helpers ======
+  async function stopCameraReceiver() {
+    try {
+      camPcRef.current?.close();
+    } catch {}
+    camPcRef.current = null;
+
+    if (camVideoRef.current) {
+      try {
+        (camVideoRef.current as any).srcObject = null;
+      } catch {}
+    }
+
+    try {
+      if (camChRef.current) supabase.removeChannel(camChRef.current);
+    } catch {}
+    camChRef.current = null;
+
+    setCamStatus("idle");
+    setCamStatusText("");
+  }
+
+  async function startCameraReceiver() {
+    // reset
+    await stopCameraReceiver();
+    setCamStatus("waiting");
+    setCamStatusText("Wachten op telefoon… (start camera op je telefoon)");
+
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+    camPcRef.current = pc;
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate && camChRef.current) {
+        camChRef.current.send({
+          type: "broadcast",
+          event: "signal",
+          payload: { type: "ice", candidate: e.candidate } satisfies CamSignalMsg,
+        });
+      }
+    };
+
+    pc.ontrack = (ev) => {
+      const stream = ev.streams?.[0];
+      if (stream && camVideoRef.current) {
+        camVideoRef.current.srcObject = stream;
+        camVideoRef.current.playsInline = true;
+        camVideoRef.current.muted = true;
+        camVideoRef.current.play?.().catch(() => {});
+      }
+      setCamStatus("connected");
+      setCamStatusText("Verbonden");
+    };
+
+    const ch = supabase.channel(`signalcam:${code}`);
+    camChRef.current = ch;
+
+    ch.on("broadcast", { event: "signal" }, async (payload: any) => {
+      const msg = payload.payload as CamSignalMsg;
+
+      try {
+        if (msg.type === "hello") {
+          // Telefoon meldt "ik ben er", wij blijven wachten op offer
+          if (camStatus !== "connected") {
+            setCamStatus("waiting");
+            setCamStatusText("Telefoon klaar. Wachten op videostart…");
+          }
+          return;
+        }
+
+        const pcLocal = camPcRef.current;
+        if (!pcLocal) return;
+
+        if (msg.type === "offer") {
+          setCamStatus("connecting");
+          setCamStatusText("Verbinden…");
+
+          await pcLocal.setRemoteDescription(msg.sdp);
+          const answer = await pcLocal.createAnswer();
+          await pcLocal.setLocalDescription(answer);
+
+          await ch.send({
+            type: "broadcast",
+            event: "signal",
+            payload: { type: "answer", sdp: answer } satisfies CamSignalMsg,
+          });
+
+          return;
+        }
+
+        if (msg.type === "ice") {
+          await pcLocal.addIceCandidate(msg.candidate);
+          return;
+        }
+      } catch (e) {
+        console.error(e);
+        setCamStatus("error");
+        setCamStatusText("Fout in camera-verbinding.");
+      }
+    });
+
+    ch.subscribe();
+
+    // help: als telefoon later joint, kan hij ons zien
+    try {
+      await ch.send({
+        type: "broadcast",
+        event: "signal",
+        payload: { type: "hello", at: Date.now() } satisfies CamSignalMsg,
+      });
+    } catch {}
+  }
+
+  // Als modal open gaat: begin meteen te luisteren (ook zonder link)
+  useEffect(() => {
+    if (!camOpen) return;
+    // luister alvast; telefoon kan later starten
+    startCameraReceiver().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [camOpen]);
+
+  // Cleanup bij unmount
+  useEffect(() => {
+    return () => {
+      stopCameraReceiver().catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ✅ Maak channel 1x en blijf daarop luisteren (ook wanneer idle)
   useEffect(() => {
@@ -210,7 +357,6 @@ export default function ShareClient({ code }: { code: string }) {
     await sender.setParameters(params);
     await broadcastQuality(q);
 
-    // update capture fps (best effort)
     try {
       const t = sender.track as any;
       if (t?.applyConstraints) {
@@ -336,7 +482,6 @@ export default function ShareClient({ code }: { code: string }) {
 
       pc.addTrack(track, stream);
 
-      // preview optioneel (om mirror te voorkomen)
       if (videoRef.current) {
         if (showPreview) {
           videoRef.current.srcObject = stream;
@@ -435,12 +580,12 @@ export default function ShareClient({ code }: { code: string }) {
       {/* ====== Modal voor Telefoon camera ====== */}
       {camOpen ? (
         <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-xl">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-lg font-semibold">Telefoon als extra camera</div>
                 <div className="text-sm text-slate-600 mt-1">
-                  Scan de QR-code met je telefoon. Je browser opent een pagina die jouw camera streamt.
+                  Scan de QR-code met je telefoon. Start daarna de camera op de telefoon. Hier zie je live beeld terug.
                 </div>
               </div>
               <button
@@ -452,48 +597,100 @@ export default function ShareClient({ code }: { code: string }) {
               </button>
             </div>
 
-            <div className="mt-4">
-              {!camLink ? (
-                <div className="flex items-center justify-between gap-3">
-                  <Button variant="primary" onClick={createPhoneCameraLink} disabled={camLoading}>
-                    {camLoading ? "Link maken…" : "Maak QR / link"}
-                  </Button>
-                  <div className="text-xs text-slate-500">Link verloopt na ±30 minuten.</div>
-                </div>
-              ) : null}
-
-              {camError ? (
-                <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{camError}</div>
-              ) : null}
-
-              {camLink ? (
-                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-                  <div className="rounded-xl border bg-slate-50 p-3">
-                    <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
-                    <div className="text-xs text-slate-500 mt-2">Werkt met iPhone/Android camera app of QR scanner.</div>
+            <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* LEFT: QR/link */}
+              <div>
+                {!camLink ? (
+                  <div className="flex items-center justify-between gap-3">
+                    <Button variant="primary" onClick={createPhoneCameraLink} disabled={camLoading}>
+                      {camLoading ? "Link maken…" : "Maak QR / link"}
+                    </Button>
+                    <div className="text-xs text-slate-500">Link verloopt na ±30 minuten.</div>
                   </div>
+                ) : null}
 
-                  <div className="rounded-xl border p-3">
-                    <div className="text-sm font-medium">Koppellink</div>
-                    <div className="mt-2 break-all text-xs text-slate-700">{camLink}</div>
-                    <div className="mt-3 flex gap-2">
-                      <Button onClick={() => copy(camLink)} className="flex-1">
-                        Kopieer link
-                      </Button>
-                      <Button
-                        onClick={() => {
-                          setCamLink("");
-                          setCamError("");
-                        }}
-                        className="w-28"
-                      >
-                        Vernieuw
-                      </Button>
+                {camError ? (
+                  <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{camError}</div>
+                ) : null}
+
+                {camLink ? (
+                  <div className="mt-4 grid grid-cols-1 gap-4 items-start">
+                    <div className="rounded-xl border bg-slate-50 p-3">
+                      <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
+                      <div className="text-xs text-slate-500 mt-2">Werkt met iPhone/Android camera app of QR scanner.</div>
                     </div>
-                    <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
+
+                    <div className="rounded-xl border p-3">
+                      <div className="text-sm font-medium">Koppellink</div>
+                      <div className="mt-2 break-all text-xs text-slate-700">{camLink}</div>
+                      <div className="mt-3 flex gap-2">
+                        <Button onClick={() => copy(camLink)} className="flex-1">
+                          Kopieer link
+                        </Button>
+                        <Button
+                          onClick={() => {
+                            setCamLink("");
+                            setCamError("");
+                          }}
+                          className="w-28"
+                        >
+                          Vernieuw
+                        </Button>
+                      </div>
+                      <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-4 text-xs text-slate-500">
+                    Je kunt alvast de modal open laten. Zodra je telefoon start, verschijnt het beeld hier.
+                  </div>
+                )}
+              </div>
+
+              {/* RIGHT: Live camera preview */}
+              <div className="rounded-xl border bg-slate-50 p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium">Live camera</div>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => startCameraReceiver()}
+                      className="h-9"
+                    >
+                      Herstart
+                    </Button>
+                    <Button
+                      onClick={() => stopCameraReceiver()}
+                      className="h-9"
+                    >
+                      Stop
+                    </Button>
                   </div>
                 </div>
-              ) : null}
+
+                <div className="mt-2 text-xs text-slate-600">
+                  Status:{" "}
+                  <span className="font-semibold">
+                    {camStatus === "idle"
+                      ? "Idle"
+                      : camStatus === "waiting"
+                        ? "Wachten"
+                        : camStatus === "connecting"
+                          ? "Verbinden"
+                          : camStatus === "connected"
+                            ? "Verbonden"
+                            : "Fout"}
+                  </span>
+                  {camStatusText ? <span className="ml-2 text-slate-500">• {camStatusText}</span> : null}
+                </div>
+
+                <div className="mt-3 rounded-xl overflow-hidden bg-black aspect-video">
+                  <video ref={camVideoRef} className="w-full h-full object-contain" />
+                </div>
+
+                <div className="mt-2 text-xs text-slate-500">
+                  Zie je zwart beeld? Start de camera op je telefoon (en geef cameratoestemming).
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -501,7 +698,6 @@ export default function ShareClient({ code }: { code: string }) {
 
       {/* ====== UI ====== */}
       <div className="h-screen w-screen bg-black">
-        {/* ViewerStage accepteert volgens TS alleen children → daarom layout hierbinnen */}
         <ViewerStage>
           <div className="h-full w-full grid grid-cols-1 lg:grid-cols-[360px_1fr_360px]">
             {/* LEFT */}
