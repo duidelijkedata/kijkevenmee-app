@@ -72,6 +72,18 @@ export default function ShareClient({ code }: { code: string }) {
 
   const snapshotWrapRef = useRef<HTMLDivElement | null>(null);
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const snapshotModalCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const [snapshotModalOpen, setSnapshotModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!snapshotModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSnapshotModalOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [snapshotModalOpen]);
 
   const origin =
     typeof window !== "undefined" && window.location?.origin
@@ -401,15 +413,7 @@ export default function ShareClient({ code }: { code: string }) {
     }
   }
 
-  // ===== Snapshot viewer rendering =====
-  useEffect(() => {
-    if (!activePacketId) return;
-    const p = packets.find((x) => x.id === activePacketId);
-    if (!p) return;
-
-    setPackets((prev) => prev.map((x) => (x.id === p.id ? { ...x, seen: true } : x)));
-
-    const canvas = snapshotCanvasRef.current;
+  function drawPacketToCanvas(packet: PacketState, canvas: HTMLCanvasElement | null) {
     if (!canvas) return;
 
     const img = new Image();
@@ -428,7 +432,7 @@ export default function ShareClient({ code }: { code: string }) {
       ctx.strokeStyle = "#ff3b30";
       ctx.fillStyle = "rgba(255,59,48,0.15)";
 
-      for (const s of p.shapes) {
+      for (const s of packet.shapes) {
         if (s.kind === "circle") {
           ctx.beginPath();
           ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
@@ -460,9 +464,19 @@ export default function ShareClient({ code }: { code: string }) {
         }
       }
     };
+    img.src = packet.snapshotJpeg;
+  }
 
-    img.src = p.snapshotJpeg;
-  }, [activePacketId, packets]);
+  // ===== Snapshot viewer rendering =====
+  useEffect(() => {
+    if (!activePacketId) return;
+    const p = packets.find((x) => x.id === activePacketId);
+    if (!p) return;
+
+    setPackets((prev) => prev.map((x) => (x.id === p.id ? { ...x, seen: true } : x)));
+    drawPacketToCanvas(p, snapshotCanvasRef.current);
+    if (snapshotModalOpen) drawPacketToCanvas(p, snapshotModalCanvasRef.current);
+  }, [activePacketId, packets, snapshotModalOpen]);
 
   async function stopUsingPhoneAndReturnToScreen() {
     await broadcastActiveSource("screen");
@@ -598,6 +612,34 @@ export default function ShareClient({ code }: { code: string }) {
         </div>
       ) : null}
 
+      {/* ====== Snapshot modal (groot, maar menus blijven zichtbaar) ====== */}
+      {snapshotModalOpen && activePacketId ? (
+        <div className="fixed inset-0 z-[2000] pointer-events-none">
+          <div className="h-full w-full flex items-center justify-center p-4 lg:pl-[360px] lg:pr-[360px] pointer-events-none">
+            <div
+              className="pointer-events-auto w-full max-w-5xl max-h-[86vh] rounded-2xl border border-white/10 bg-black/70 shadow-2xl backdrop-blur p-3"
+              role="dialog"
+              aria-modal="true"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="text-white text-sm font-semibold">Snapshot</div>
+                <button
+                  className="h-9 w-9 rounded-xl border border-white/15 bg-white/5 text-white hover:bg-white/10"
+                  onClick={() => setSnapshotModalOpen(false)}
+                  aria-label="Sluiten"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="mt-3 overflow-auto max-h-[76vh]">
+                <canvas ref={snapshotModalCanvasRef} className="w-full rounded-xl bg-black/40" />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* ====== UI ====== */}
       <div className="h-screen w-screen bg-black">
         <ViewerStage>
@@ -723,7 +765,14 @@ export default function ShareClient({ code }: { code: string }) {
                   </div>
                 </div>
 
-                <div ref={snapshotWrapRef} className="rounded-xl bg-white/10 p-3">
+                <div
+                  ref={snapshotWrapRef}
+                  className="rounded-xl bg-white/10 p-3 cursor-zoom-in"
+                  onClick={() => {
+                    if (!activePacketId) return;
+                    setSnapshotModalOpen(true);
+                  }}
+                >
                   <div className="text-white text-xs opacity-80 mb-2">Snapshot viewer</div>
                   <canvas ref={snapshotCanvasRef} className="w-full rounded-lg bg-black/40" />
                 </div>

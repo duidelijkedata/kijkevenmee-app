@@ -435,28 +435,68 @@ export default function KindVerbinden() {
   }, []);
 
   // ===== Drawing (bestaand) =====
-  function getCanvasXY(e: React.PointerEvent) {
-    const canvas = canvasRef.current;
+  /**
+   * Map pointer coords -> VIDEO pixel coords, rekening houdend met:
+   * - object-contain letterboxing
+   * - pan (translate)
+   * - zoom (scale rondom center)
+   */
+  function getVideoXY(e: React.PointerEvent) {
     const wrap = wrapRef.current;
     const vid = videoRef.current;
-    if (!canvas || !wrap || !vid) return null;
+    if (!wrap || !vid) return null;
 
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
-    return { x, y };
+    const vw = vid.videoWidth || 0;
+    const vh = vid.videoHeight || 0;
+    if (!vw || !vh) return null;
+
+    const r = wrap.getBoundingClientRect();
+    const W = r.width;
+    const H = r.height;
+    if (!W || !H) return null;
+
+    // pointer in wrap coords
+    let x = e.clientX - r.left;
+    let y = e.clientY - r.top;
+
+    // undo translate (pan) — translate gebeurt in scherm-pixels
+    x -= pan.x;
+    y -= pan.y;
+
+    // undo scale around center
+    const cx = W / 2;
+    const cy = H / 2;
+    x = (x - cx) / zoom + cx;
+    y = (y - cy) / zoom + cy;
+
+    // object-contain: bepaal zichtbare video-rect in wrap coords
+    const s = Math.min(W / vw, H / vh);
+    const dispW = vw * s;
+    const dispH = vh * s;
+    const offX = (W - dispW) / 2;
+    const offY = (H - dispH) / 2;
+
+    // naar video pixel coords
+    const nx = (x - offX) / dispW;
+    const ny = (y - offY) / dispH;
+
+    // clamp zodat je niet buiten beeld tekent
+    const clampedX = clamp(nx, 0, 1) * vw;
+    const clampedY = clamp(ny, 0, 1) * vh;
+
+    return { x: clampedX, y: clampedY, vw, vh, W, H, offX, offY, dispW, dispH };
   }
 
   function onCanvasPointerDown(e: React.PointerEvent) {
     if (!annotate) return;
-    const p = getCanvasXY(e);
+    const p = getVideoXY(e);
     if (!p) return;
     setDrawing({ startX: p.x, startY: p.y, currentX: p.x, currentY: p.y });
   }
 
   function onCanvasPointerMove(e: React.PointerEvent) {
     if (!drawing) return;
-    const p = getCanvasXY(e);
+    const p = getVideoXY(e);
     if (!p) return;
     setDrawing({ ...drawing, currentX: p.x, currentY: p.y });
   }
@@ -489,19 +529,26 @@ export default function KindVerbinden() {
   useEffect(() => {
     const canvas = canvasRef.current;
     const v = videoRef.current;
+    const wrap = wrapRef.current;
     if (!canvas || !v) return;
+    if (!wrap) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
     const render = () => {
-      const w = (v.videoWidth || 1280) | 0;
-      const h = (v.videoHeight || 720) | 0;
+      const vw = (v.videoWidth || 1280) | 0;
+      const vh = (v.videoHeight || 720) | 0;
 
-      if (canvas.width !== w) canvas.width = w;
-      if (canvas.height !== h) canvas.height = h;
+      const r = wrap.getBoundingClientRect();
+      const W = (r.width || 1) | 0;
+      const H = (r.height || 1) | 0;
 
-      ctx.clearRect(0, 0, w, h);
+      // render in SCREEN space zodat overlay altijd precies overeenkomt met wat kind ziet
+      if (canvas.width !== W) canvas.width = W;
+      if (canvas.height !== H) canvas.height = H;
+
+      ctx.clearRect(0, 0, W, H);
 
       ctx.lineWidth = 6;
       ctx.strokeStyle = "#ff3b30";
@@ -524,31 +571,57 @@ export default function KindVerbinden() {
         }
       }
 
+      // object-contain rect in ONGETRANSFORMDE wrap coords
+      const baseScale = Math.min(W / vw, H / vh);
+      const dispW = vw * baseScale;
+      const dispH = vh * baseScale;
+      const offX = (W - dispW) / 2;
+      const offY = (H - dispH) / 2;
+
+      // helper: video px -> screen px (incl pan+zoom)
+      const cx = W / 2;
+      const cy = H / 2;
+      const toScreen = (vx: number, vy: number) => {
+        const bx = offX + (vx / vw) * dispW;
+        const by = offY + (vy / vh) * dispH;
+        const sx = (bx - cx) * zoom + cx + pan.x;
+        const sy = (by - cy) * zoom + cy + pan.y;
+        return { x: sx, y: sy };
+      };
+
+      const scaleForVideo = baseScale * zoom; // video->screen scale factor
+
       for (const s of all) {
         if (s.kind === "circle") {
+          const p = toScreen(s.x, s.y);
+          const rr = s.r * scaleForVideo;
           ctx.beginPath();
-          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.arc(p.x, p.y, rr, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
         } else if (s.kind === "rect") {
+          const p1 = toScreen(s.x, s.y);
+          const p2 = toScreen(s.x + s.w, s.y + s.h);
           ctx.beginPath();
-          ctx.rect(s.x, s.y, s.w, s.h);
+          ctx.rect(p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
           ctx.fill();
           ctx.stroke();
         } else if (s.kind === "arrow") {
           const { x1, y1, x2, y2 } = s;
+          const a1 = toScreen(x1, y1);
+          const a2 = toScreen(x2, y2);
           const head = 18;
-          const angle = Math.atan2(y2 - y1, x2 - x1);
+          const angle = Math.atan2(a2.y - a1.y, a2.x - a1.x);
 
           ctx.beginPath();
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(x2, y2);
+          ctx.moveTo(a1.x, a1.y);
+          ctx.lineTo(a2.x, a2.y);
           ctx.stroke();
 
           ctx.beginPath();
-          ctx.moveTo(x2, y2);
-          ctx.lineTo(x2 - head * Math.cos(angle - Math.PI / 6), y2 - head * Math.sin(angle - Math.PI / 6));
-          ctx.lineTo(x2 - head * Math.cos(angle + Math.PI / 6), y2 - head * Math.sin(angle + Math.PI / 6));
+          ctx.moveTo(a2.x, a2.y);
+          ctx.lineTo(a2.x - head * Math.cos(angle - Math.PI / 6), a2.y - head * Math.sin(angle - Math.PI / 6));
+          ctx.lineTo(a2.x - head * Math.cos(angle + Math.PI / 6), a2.y - head * Math.sin(angle + Math.PI / 6));
           ctx.closePath();
           ctx.fillStyle = "#ff3b30";
           ctx.fill();
@@ -569,8 +642,9 @@ export default function KindVerbinden() {
     const ch = channelRef.current;
     if (!v || !canvas || !ch) return;
 
-    const w = canvas.width || 1280;
-    const h = canvas.height || 720;
+    // altijd snapshot in PURE video pixels (ongeacht zoom/pan), zodat shapes 1:1 matchen
+    const w = v.videoWidth || 1280;
+    const h = v.videoHeight || 720;
 
     const tmp = document.createElement("canvas");
     tmp.width = w;
