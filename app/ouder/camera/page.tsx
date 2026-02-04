@@ -27,6 +27,7 @@ export default function OuderCameraPage() {
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewTimerRef = useRef<any>(null);
+
   const streamRef = useRef<MediaStream | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -40,7 +41,77 @@ export default function OuderCameraPage() {
     setToken(t);
   }, []);
 
-  async function stop() {
+  function stopPreviewLoop() {
+    try {
+      if (previewTimerRef.current) clearInterval(previewTimerRef.current);
+    } catch {}
+    previewTimerRef.current = null;
+  }
+
+  function sendCamPreview(jpeg: string) {
+    const main = mainChannelRef.current;
+    if (!main) return;
+
+    main
+      .send({
+        type: "broadcast",
+        event: "signal",
+        payload: { type: "cam_preview", jpeg, at: Date.now() } satisfies MainSignalMsg,
+      })
+      .catch(() => {});
+  }
+
+  function startPreviewLoop() {
+    stopPreviewLoop();
+
+    // ~2 fps is genoeg voor overlay preview zonder Supabase te spammen
+    previewTimerRef.current = setInterval(() => {
+      const v = videoPreviewRef.current;
+      const c = previewCanvasRef.current;
+      if (!v || !c) return;
+      if (v.readyState < 2) return;
+
+      const vw = v.videoWidth || 0;
+      const vh = v.videoHeight || 0;
+      if (!vw || !vh) return;
+
+      const maxW = 360;
+      const scale = Math.min(1, maxW / vw);
+      const tw = Math.max(1, Math.round(vw * scale));
+      const th = Math.max(1, Math.round(vh * scale));
+
+      c.width = tw;
+      c.height = th;
+
+      const ctx = c.getContext("2d");
+      if (!ctx) return;
+
+      try {
+        ctx.drawImage(v, 0, 0, tw, th);
+        const jpeg = c.toDataURL("image/jpeg", 0.6);
+        if (jpeg && jpeg.startsWith("data:image/jpeg")) {
+          sendCamPreview(jpeg);
+        }
+      } catch {
+        // ignore
+      }
+    }, 500);
+  }
+
+  async function broadcastActiveSource(source: ActiveSource) {
+    const main = mainChannelRef.current;
+    if (!main) return;
+
+    await main.send({
+      type: "broadcast",
+      event: "signal",
+      payload: { type: "active_source", source } satisfies MainSignalMsg,
+    });
+  }
+
+  async function stop(sendBackToScreen: boolean = true) {
+    stopPreviewLoop();
+
     try {
       pcRef.current?.close();
     } catch {}
@@ -57,10 +128,11 @@ export default function OuderCameraPage() {
       } catch {}
     }
 
-    try {
-      if (previewTimerRef.current) clearInterval(previewTimerRef.current);
-    } catch {}
-    previewTimerRef.current = null;
+    if (sendBackToScreen) {
+      try {
+        await broadcastActiveSource("screen");
+      } catch {}
+    }
 
     setErrorText("");
     setStatus(code ? "ready" : "idle");
@@ -182,100 +254,14 @@ export default function OuderCameraPage() {
     };
   }, [supabase, code]);
 
-  function fireActiveSourceCamera() {
-    const main = mainChannelRef.current;
-    if (!main) return;
-
-    // Fire-and-forget: mag nooit je Start Camera blokkeren
-    main
-      .send({
-        type: "broadcast",
-        event: "signal",
-        payload: { type: "active_source", source: "camera" } satisfies MainSignalMsg,
-      })
-      .catch((e: any) => {
-        console.warn("active_source broadcast failed", e);
-      });
-  }
-
-  function sendCamPreview(jpeg: string) {
-    const main = mainChannelRef.current;
-    if (!main) return;
-    main
-      .send({
-        type: "broadcast",
-        event: "signal",
-        payload: { type: "cam_preview", jpeg, at: Date.now() } satisfies MainSignalMsg,
-      })
-      .catch(() => {});
-  }
-
-  function startPreviewLoop() {
-    try {
-      if (previewTimerRef.current) clearInterval(previewTimerRef.current);
-    } catch {}
-    previewTimerRef.current = null;
-
-    // ~2 fps is genoeg voor een “live preview” in de overlay zonder Supabase te spammen
-    previewTimerRef.current = setInterval(() => {
-      const v = videoPreviewRef.current;
-      const c = previewCanvasRef.current;
-      if (!v || !c) return;
-      if (v.readyState < 2) return;
-
-      const w = v.videoWidth || 0;
-      const h = v.videoHeight || 0;
-      if (!w || !h) return;
-
-      // schaal down voor lightweight preview
-      const maxW = 360;
-      const scale = Math.min(1, maxW / w);
-      const tw = Math.max(1, Math.round(w * scale));
-      const th = Math.max(1, Math.round(h * scale));
-
-      c.width = tw;
-      c.height = th;
-
-      const ctx = c.getContext("2d");
-      if (!ctx) return;
-
-      try {
-        ctx.drawImage(v, 0, 0, tw, th);
-        const jpeg = c.toDataURL("image/jpeg", 0.6);
-        if (jpeg && jpeg.startsWith("data:image/jpeg")) {
-          sendCamPreview(jpeg);
-        }
-      } catch {
-        // ignore
-      }
-    }, 500);
-  }
-
-  useEffect(() => {
-    return () => {
-      try {
-        if (previewTimerRef.current) clearInterval(previewTimerRef.current);
-      } catch {}
-      previewTimerRef.current = null;
-
-      // best-effort stoppen van media/pc
-      try {
-        pcRef.current?.close();
-      } catch {}
-      try {
-        streamRef.current?.getTracks()?.forEach((t) => t.stop());
-      } catch {}
-    };
-  }, []);
-
   async function startCamera() {
     if (!code) return;
 
     setErrorText("");
     setStatus("connecting");
 
-    // opruimen oude stream/pc
-    await stop();
+    // opruimen oude stream/pc (zonder actief terug te switchen naar screen)
+    await stop(false);
     setStatus("connecting");
 
     const pc = new RTCPeerConnection({
@@ -307,7 +293,7 @@ export default function OuderCameraPage() {
       streamRef.current = stream;
 
       const track = stream.getVideoTracks()[0];
-      track.addEventListener("ended", () => void stop());
+      track.addEventListener("ended", () => void stop(true));
 
       pc.addTrack(track, stream);
 
@@ -319,11 +305,13 @@ export default function OuderCameraPage() {
         await videoPreviewRef.current.play().catch(() => {});
       }
 
-      // start live preview frames voor de overlay op /ouder/share
+      // ✅ start overlay preview stream
       startPreviewLoop();
 
       // ✅ pas NU switchen we het kind naar de telefoonbron
-      fireActiveSourceCamera();
+      try {
+        await broadcastActiveSource("camera");
+      } catch {}
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -345,9 +333,22 @@ export default function OuderCameraPage() {
       console.error(e);
       setStatus("error");
       setErrorText(e?.message || "Kon camera niet starten. Geef toestemming in je browser.");
-      await stop();
+      await stop(true);
     }
   }
+
+  useEffect(() => {
+    return () => {
+      stopPreviewLoop();
+      try {
+        pcRef.current?.close();
+      } catch {}
+      try {
+        streamRef.current?.getTracks()?.forEach((t) => t.stop());
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <main className="min-h-screen bg-slate-50 p-4">
@@ -358,51 +359,50 @@ export default function OuderCameraPage() {
             Gebruik je telefoon als losse camera. Richt hem op wat je wilt laten zien (router, brief, toetsenbord, etc.).
           </p>
 
-          <div className="mt-4 rounded-xl overflow-hidden border bg-white">
-            <video ref={videoPreviewRef} className="w-full rounded-xl bg-black" playsInline muted />
+          <div className="mt-4 rounded-xl overflow-hidden bg-black">
+            <video ref={videoPreviewRef} className="w-full h-auto" />
             <canvas ref={previewCanvasRef} className="hidden" />
           </div>
 
-          <div className="mt-4 flex items-center gap-2">
+          {status === "error" && (
+            <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{errorText}</div>
+          )}
+
+          <div className="mt-4 flex gap-2">
             <Button
               variant="primary"
               onClick={startCamera}
               disabled={status === "resolving" || status === "connecting" || status === "connected" || !code}
               className="flex-1"
             >
-              {status === "connecting" || status === "connected" ? "Camera draait…" : "Start camera"}
+              {status === "connecting" || status === "connected" ? "Camera draait" : "Start camera"}
             </Button>
-
-            <Button
-              onClick={async () => {
-                // als iemand op de telefoon stopt, schakelen we het kind weer terug
-                try {
-                  await mainChannelRef.current?.send({
-                    type: "broadcast",
-                    event: "signal",
-                    payload: { type: "active_source", source: "screen" } satisfies MainSignalMsg,
-                  });
-                } catch {}
-                await stop();
-              }}
-              disabled={status === "resolving"}
-              className="w-28"
-            >
+            <Button onClick={() => void stop(true)} disabled={status === "resolving"} className="w-28">
               Stop
             </Button>
           </div>
 
           <div className="mt-3 text-sm text-slate-600">
-            Status: <span className="font-semibold">{status}</span>
-            {code ? <span className="text-slate-400"> • sessie {code}</span> : null}
+            Status:{" "}
+            <span className="font-medium text-slate-900">
+              {status === "resolving"
+                ? "Koppelen…"
+                : status === "ready"
+                ? "Klaar"
+                : status === "connecting"
+                ? "Verbinden…"
+                : status === "connected"
+                ? "Verbonden"
+                : status === "error"
+                ? "Fout"
+                : "Idle"}
+            </span>
           </div>
 
-          {errorText ? <div className="mt-2 text-sm text-red-600">{errorText}</div> : null}
+          {code ? <div className="mt-2 text-xs text-slate-500">Sessie: {code}</div> : null}
         </Card>
 
-        <div className="text-xs text-slate-500">
-          Tip: als je telefoon de “Start camera” knop niet laat werken, check camera-permissies in je browser en refresh de pagina.
-        </div>
+        <div className="text-xs text-slate-500 text-center">Tip: zet je telefoon in landscape voor een bredere view.</div>
       </div>
     </main>
   );

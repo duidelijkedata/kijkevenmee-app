@@ -294,8 +294,8 @@ export default function KindVerbinden() {
           if (msg.source === "screen") {
             if (screenStreamRef.current) attachStream(screenStreamRef.current);
           } else if (msg.source === "camera") {
+            // ✅ FIX: als de camera-stream nog niet binnen is, blijf huidig scherm tonen (geen zwart).
             if (camStreamRef.current) attachStream(camStreamRef.current);
-            else attachStream(null);
           }
         }
       } catch (e) {
@@ -434,135 +434,347 @@ export default function KindVerbinden() {
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
-  // (rest van jouw bestand blijft exact hetzelfde)
-  // --- LET OP: ik laat hieronder bewust de rest intact, want je vroeg “geen layout wijzigingen”.
-  // In jouw zip staat hier nog een groot JSX-blok; die blijft ongewijzigd.
-  // Plaats hier dus de rest van het originele bestand vanaf jouw huidige return().
+  // ===== Drawing (bestaand) =====
+  function getCanvasXY(e: React.PointerEvent) {
+    const canvas = canvasRef.current;
+    const wrap = wrapRef.current;
+    const vid = videoRef.current;
+    if (!canvas || !wrap || !vid) return null;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    return { x, y };
+  }
+
+  function onCanvasPointerDown(e: React.PointerEvent) {
+    if (!annotate) return;
+    const p = getCanvasXY(e);
+    if (!p) return;
+    setDrawing({ startX: p.x, startY: p.y, currentX: p.x, currentY: p.y });
+  }
+
+  function onCanvasPointerMove(e: React.PointerEvent) {
+    if (!drawing) return;
+    const p = getCanvasXY(e);
+    if (!p) return;
+    setDrawing({ ...drawing, currentX: p.x, currentY: p.y });
+  }
+
+  function onCanvasPointerUp() {
+    if (!drawing) return;
+
+    const { startX, startY, currentX, currentY } = drawing;
+    const dx = currentX - startX;
+    const dy = currentY - startY;
+
+    let shape: DraftShape | null = null;
+
+    if (tool === "circle") {
+      const r = Math.sqrt(dx * dx + dy * dy);
+      if (r > 8) shape = { kind: "circle", x: startX, y: startY, r };
+    } else if (tool === "rect") {
+      if (Math.abs(dx) > 8 && Math.abs(dy) > 8) {
+        shape = { kind: "rect", x: startX, y: startY, w: dx, h: dy };
+      }
+    } else if (tool === "arrow") {
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) shape = { kind: "arrow", x1: startX, y1: startY, x2: currentX, y2: currentY };
+    }
+
+    if (shape) setShapes((prev) => [...prev, shape]);
+    setDrawing(null);
+  }
+
+  // Render draft overlay op canvas (bestaand)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const v = videoRef.current;
+    if (!canvas || !v) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const render = () => {
+      const w = (v.videoWidth || 1280) | 0;
+      const h = (v.videoHeight || 720) | 0;
+
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+
+      ctx.clearRect(0, 0, w, h);
+
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = "#ff3b30";
+      ctx.fillStyle = "rgba(255,59,48,0.15)";
+
+      const all: DraftShape[] = [...shapes];
+
+      if (drawing) {
+        const { startX, startY, currentX, currentY } = drawing;
+        const dx = currentX - startX;
+        const dy = currentY - startY;
+
+        if (tool === "circle") {
+          const r = Math.sqrt(dx * dx + dy * dy);
+          if (r > 1) all.push({ kind: "circle", x: startX, y: startY, r });
+        } else if (tool === "rect") {
+          all.push({ kind: "rect", x: startX, y: startY, w: dx, h: dy });
+        } else if (tool === "arrow") {
+          all.push({ kind: "arrow", x1: startX, y1: startY, x2: currentX, y2: currentY });
+        }
+      }
+
+      for (const s of all) {
+        if (s.kind === "circle") {
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        } else if (s.kind === "rect") {
+          ctx.beginPath();
+          ctx.rect(s.x, s.y, s.w, s.h);
+          ctx.fill();
+          ctx.stroke();
+        } else if (s.kind === "arrow") {
+          const { x1, y1, x2, y2 } = s;
+          const head = 18;
+          const angle = Math.atan2(y2 - y1, x2 - x1);
+
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(x2, y2);
+          ctx.lineTo(x2 - head * Math.cos(angle - Math.PI / 6), y2 - head * Math.sin(angle - Math.PI / 6));
+          ctx.lineTo(x2 - head * Math.cos(angle + Math.PI / 6), y2 - head * Math.sin(angle + Math.PI / 6));
+          ctx.closePath();
+          ctx.fillStyle = "#ff3b30";
+          ctx.fill();
+          ctx.fillStyle = "rgba(255,59,48,0.15)";
+        }
+      }
+
+      requestAnimationFrame(render);
+    };
+
+    let raf = requestAnimationFrame(render);
+    return () => cancelAnimationFrame(raf);
+  }, [drawing, shapes, tool]);
+
+  async function sendSnapshot() {
+    const v = videoRef.current;
+    const canvas = canvasRef.current;
+    const ch = channelRef.current;
+    if (!v || !canvas || !ch) return;
+
+    const w = canvas.width || 1280;
+    const h = canvas.height || 720;
+
+    const tmp = document.createElement("canvas");
+    tmp.width = w;
+    tmp.height = h;
+    const ctx = tmp.getContext("2d");
+    if (!ctx) return;
+
+    try {
+      ctx.drawImage(v, 0, 0, w, h);
+      const jpeg = tmp.toDataURL("image/jpeg", 0.7);
+
+      const packet: DrawPacket = {
+        id: uid(),
+        createdAt: Date.now(),
+        snapshotJpeg: jpeg,
+        shapes,
+      };
+
+      await ch.send({
+        type: "broadcast",
+        event: "signal",
+        payload: { type: "draw_packet", packet } satisfies SignalMsg,
+      });
+
+      setShapes([]);
+      setAnnotate(false);
+    } catch (e) {
+      console.error(e);
+    }
+  }
 
   return (
-    <FullscreenShell sidebar={null}>
-      <div className="h-screen w-screen bg-black">
-        <ViewerStage>
-          <div className="h-full w-full grid grid-cols-1 lg:grid-cols-[360px_1fr]">
-            {/* LEFT */}
-            <div className="min-w-0 border-b lg:border-b-0 lg:border-r border-white/10">
-              <div className="p-3 flex flex-col gap-3">
-                <div className="text-white text-sm font-semibold">Kind – verbinden</div>
+    <FullscreenShell
+      sidebar={
+        <div className="p-3 flex flex-col gap-3">
+          <div className="text-sm font-semibold">Kind – verbinden</div>
 
-                {activeError ? <div className="text-sm text-red-400">{activeError}</div> : null}
+          {/* Active sessions (als useKoppelcode uit staat) */}
+          {!useKoppelcode ? (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="text-sm font-semibold">Actieve sessies</div>
+              <div className="text-xs text-slate-600 mt-1">
+                Kies een sessie om direct mee te kijken.
+              </div>
 
-                {useKoppelcode ? (
-                  <>
-                    <div className="text-xs text-white/70">Koppelcode</div>
-                    <Input
-                      value={code}
-                      onChange={(e) => setCode(formatCode(e.target.value))}
-                      placeholder="123 456"
-                      className="text-white"
-                    />
-                    <div className="flex gap-2 flex-wrap">
-                      {!connected ? (
-                        <Button
-                          variant="primary"
-                          onClick={() => void connect()}
-                          disabled={status === "connecting" || String(code).replace(/\D/g, "").length !== 6}
-                        >
-                          Verbinden
-                        </Button>
-                      ) : (
-                        <Button onClick={() => void disconnect()}>Verbreken</Button>
-                      )}
-                    </div>
-                  </>
+              {activeError ? (
+                <div className="mt-2 text-xs text-red-700">{activeError}</div>
+              ) : null}
+
+              <div className="mt-3 flex flex-col gap-2">
+                {activeSessions.length ? (
+                  activeSessions.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => void connect(s.code)}
+                      className="text-left rounded-xl border px-3 py-2 hover:bg-slate-50"
+                    >
+                      <div className="text-xs text-slate-500">Code</div>
+                      <div className="font-semibold tracking-widest">{formatCode(s.code)}</div>
+                    </button>
+                  ))
                 ) : (
-                  <>
-                    <div className="text-xs text-white/70">Actieve sessies</div>
-                    <div className="flex flex-col gap-2">
-                      {activeSessions.map((s) => (
-                        <Button key={s.id} onClick={() => void connect(s.code)}>
-                          {s.code}
-                        </Button>
-                      ))}
-                    </div>
-                    <Button variant="secondary" onClick={() => void refreshActiveSessions()}>
-                      Refresh
-                    </Button>
-                  </>
+                  <div className="text-xs text-slate-500">Geen actieve sessies.</div>
                 )}
+              </div>
 
-                <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
-                  <div>
-                    Status: <span className="font-semibold">{status}</span>
-                  </div>
-                  <div className="mt-1 text-xs opacity-80">
-                    Bron: <span className="font-semibold">{activeSource === "screen" ? "PC" : "Telefoon"}</span>
-                    {remoteQuality ? <span className="ml-2">• Kwaliteit: {remoteQuality}</span> : null}
-                  </div>
-                </div>
-
-                {needsTapToPlay ? (
-                  <Button variant="primary" onClick={tapToPlay}>
-                    Tik om video te starten
-                  </Button>
-                ) : null}
-
-                <div className="flex gap-2 flex-wrap">
-                  <Button onClick={zoomOut} disabled={zoom <= 1}>
-                    –
-                  </Button>
-                  <Button onClick={zoomIn} disabled={zoom >= 3}>
-                    +
-                  </Button>
-                  <Button onClick={resetView} disabled={zoom === 1 && pan.x === 0 && pan.y === 0}>
-                    Reset
-                  </Button>
-                  <Button onClick={toggleFullscreen}>{isFullscreen ? "Exit fullscreen" : "Fullscreen"}</Button>
-                </div>
-
-                <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
-                  <div className="font-semibold">Annoteren</div>
-                  <label className="mt-2 flex items-center gap-2 text-xs opacity-90 select-none">
-                    <input type="checkbox" checked={annotate} onChange={(e) => setAnnotate(e.target.checked)} />
-                    Aan
-                  </label>
-
-                  <div className="mt-2 flex gap-2 flex-wrap">
-                    {(["circle", "rect", "arrow"] as DrawTool[]).map((t) => (
-                      <Button key={t} variant={tool === t ? "primary" : "secondary"} onClick={() => setTool(t)}>
-                        {t}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
+              <div className="mt-3">
+                <Button onClick={() => void refreshActiveSessions()} className="w-full">
+                  Vernieuw
+                </Button>
               </div>
             </div>
+          ) : (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="text-sm font-semibold">Sessiecode</div>
+              <div className="text-xs text-slate-600 mt-1">Vul de 6-cijferige code in die je ouder/helper ziet.</div>
 
-            {/* RIGHT */}
-            <div className="min-w-0 flex items-center justify-center">
-              <div
-                ref={wrapRef}
-                className="h-full w-full flex items-center justify-center relative overflow-hidden touch-none"
-                onWheel={onWheel}
-                onPointerDown={onPointerDownPan}
-                onPointerMove={onPointerMovePan}
-                onPointerUp={onPointerUpPan}
-                onPointerCancel={onPointerUpPan}
-              >
-                <div
-                  className="relative"
-                  style={{
-                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                    transformOrigin: "center",
-                  }}
-                >
-                  <video ref={videoRef} className="max-h-[92vh] max-w-[92vw]" />
-                  <canvas ref={canvasRef} className="absolute inset-0" />
-                </div>
+              <div className="mt-3 flex gap-2">
+                <Input value={formatCode(code)} onChange={(e) => setCode(e.target.value)} placeholder="123 456" />
+                <Button variant="primary" onClick={() => void connect()} disabled={status === "connecting"}>
+                  Verbinden
+                </Button>
               </div>
+
+              <div className="mt-2 text-xs text-slate-500">
+                Status:{" "}
+                <span className="font-semibold">
+                  {status === "idle" ? "Niet verbonden" : status === "connecting" ? "Verbinden…" : status === "connected" ? "Verbonden" : "Fout"}
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-xl border bg-white p-3">
+            <div className="text-sm font-semibold">Aantekeningen</div>
+
+            <div className="mt-2 flex gap-2 flex-wrap">
+              <Button variant={annotate ? "primary" : "secondary"} onClick={() => setAnnotate((v) => !v)}>
+                {annotate ? "Tekenen aan" : "Tekenen uit"}
+              </Button>
+              <Button onClick={() => setShapes([])} disabled={!shapes.length}>
+                Wis
+              </Button>
+              <Button variant="primary" onClick={() => void sendSnapshot()} disabled={!shapes.length || !connected}>
+                Snapshot sturen
+              </Button>
+            </div>
+
+            <div className="mt-3 flex gap-2 flex-wrap">
+              <Button variant={tool === "circle" ? "primary" : "secondary"} onClick={() => setTool("circle")}>
+                Cirkel
+              </Button>
+              <Button variant={tool === "rect" ? "primary" : "secondary"} onClick={() => setTool("rect")}>
+                Rechthoek
+              </Button>
+              <Button variant={tool === "arrow" ? "primary" : "secondary"} onClick={() => setTool("arrow")}>
+                Pijl
+              </Button>
             </div>
           </div>
-        </ViewerStage>
-      </div>
+
+          <div className="rounded-xl border bg-white p-3">
+            <div className="text-sm font-semibold">Weergave</div>
+            <div className="mt-2 flex gap-2 flex-wrap">
+              <Button onClick={zoomOut}>-</Button>
+              <Button onClick={zoomIn}>+</Button>
+              <Button onClick={resetView}>Reset</Button>
+              <Button onClick={toggleFullscreen}>Fullscreen</Button>
+            </div>
+
+            <div className="mt-2 text-xs text-slate-600">
+              Actieve bron: <b>{activeSource === "camera" ? "Telefoon" : "Scherm"}</b>
+              {remoteQuality ? (
+                <>
+                  {" "}
+                  • Kwaliteit: <b>{remoteQuality}</b>
+                </>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="mt-auto">
+            <Button onClick={() => void disconnect()} disabled={!connected} className="w-full">
+              Verbreken
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <ViewerStage>
+        <div className="h-full w-full flex items-center justify-center bg-black">
+          <div
+            ref={wrapRef}
+            className="relative w-full h-full overflow-hidden"
+            onWheel={onWheel}
+            onPointerDown={onPointerDownPan}
+            onPointerMove={onPointerMovePan}
+            onPointerUp={onPointerUpPan}
+            onPointerCancel={onPointerUpPan}
+            style={{ touchAction: annotate ? "none" : "pan-x pan-y" }}
+          >
+            <div
+              className="absolute inset-0"
+              style={{
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: "center center",
+              }}
+            >
+              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
+            </div>
+
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0"
+              style={{ pointerEvents: annotate ? "auto" : "none" }}
+              onPointerDown={onCanvasPointerDown}
+              onPointerMove={onCanvasPointerMove}
+              onPointerUp={onCanvasPointerUp}
+              onPointerCancel={onCanvasPointerUp}
+              onPointerLeave={onCanvasPointerUp}
+            />
+
+            {needsTapToPlay ? (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="rounded-2xl bg-black/70 border border-white/15 text-white px-4 py-3 text-sm">
+                  <div className="font-semibold mb-1">Klik om beeld te starten</div>
+                  <div className="text-white/70 mb-3">
+                    Je browser blokkeert autoplay. Klik hieronder om de stream te starten.
+                  </div>
+                  <Button variant="primary" onClick={tapToPlay}>
+                    Start beeld
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {isFullscreen ? (
+              <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2">
+                Fullscreen — druk <b>ESC</b> om terug te gaan
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </ViewerStage>
     </FullscreenShell>
   );
 }

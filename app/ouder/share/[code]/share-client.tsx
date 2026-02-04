@@ -267,30 +267,27 @@ export default function ShareClient({ code }: { code: string }) {
         let outbound: any = null;
 
         stats.forEach((r) => {
-          if (r.type === "outbound-rtp" && r.kind === "video") outbound = r;
+          if (r.type === "outbound-rtp" && (r as any).kind === "video") outbound = r;
         });
 
         if (!outbound) return;
 
-        const bytes = outbound.bytesSent as number;
         const now = Date.now();
+        const bytesSent = outbound.bytesSent || 0;
 
-        const lastBytes = lastBytesSentRef.current;
-        const lastAt = lastStatsAtRef.current;
+        if (lastBytesSentRef.current != null && lastStatsAtRef.current != null) {
+          const dt = (now - lastStatsAtRef.current) / 1000;
+          const db = bytesSent - lastBytesSentRef.current;
+          const mbps = (db * 8) / (dt * 1_000_000);
 
-        lastBytesSentRef.current = bytes;
-        lastStatsAtRef.current = now;
-
-        if (lastBytes != null && lastAt != null) {
-          const dt = (now - lastAt) / 1000;
-          if (dt > 0) {
-            const bps = ((bytes - lastBytes) * 8) / dt;
-            const mbps = bps / 1_000_000;
-            setDebugLine(`Upload ~ ${mbps.toFixed(1)} Mbps`);
-          }
+          const fps = outbound.framesPerSecond ? ` • ${Math.round(outbound.framesPerSecond)}fps` : "";
+          setDebugLine(`${mbps.toFixed(1)} Mbps${fps}`);
         }
+
+        lastBytesSentRef.current = bytesSent;
+        lastStatsAtRef.current = now;
       } catch {}
-    }, 1500);
+    }, 1200);
   }
 
   async function stopShare() {
@@ -405,68 +402,50 @@ export default function ShareClient({ code }: { code: string }) {
 
     setPackets((prev) => prev.map((x) => (x.id === p.id ? { ...x, seen: true } : x)));
 
-    const wrap = snapshotWrapRef.current;
     const canvas = snapshotCanvasRef.current;
-    if (!wrap || !canvas) return;
+    if (!canvas) return;
 
     const img = new Image();
     img.onload = () => {
-      const cw = wrap.clientWidth;
-      const ch = wrap.clientHeight;
+      const w = img.naturalWidth || 1280;
+      const h = img.naturalHeight || 720;
+      canvas.width = w;
+      canvas.height = h;
+
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+      ctx.clearRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
 
-      canvas.width = cw;
-      canvas.height = ch;
-
-      ctx.clearRect(0, 0, cw, ch);
-
-      const scale = Math.min(cw / img.width, ch / img.height);
-      const dw = img.width * scale;
-      const dh = img.height * scale;
-      const dx = (cw - dw) / 2;
-      const dy = (ch - dh) / 2;
-
-      ctx.drawImage(img, dx, dy, dw, dh);
-
-      ctx.lineWidth = 3;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = "#ff3b30";
+      ctx.fillStyle = "rgba(255,59,48,0.15)";
 
       for (const s of p.shapes) {
         if (s.kind === "circle") {
-          ctx.strokeStyle = "#3b82f6";
           ctx.beginPath();
-          ctx.arc(dx + s.x * dw, dy + s.y * dh, s.r * Math.min(dw, dh), 0, Math.PI * 2);
-          ctx.stroke();
-
-          ctx.fillStyle = "rgba(59,130,246,0.15)";
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
           ctx.fill();
+          ctx.stroke();
         } else if (s.kind === "rect") {
-          ctx.strokeStyle = "#22c55e";
-          ctx.strokeRect(dx + s.x * dw, dy + s.y * dh, s.w * dw, s.h * dh);
-          ctx.fillStyle = "rgba(34,197,94,0.15)";
-          ctx.fillRect(dx + s.x * dw, dy + s.y * dh, s.w * dw, s.h * dh);
+          ctx.beginPath();
+          ctx.rect(s.x, s.y, s.w, s.h);
+          ctx.fill();
+          ctx.stroke();
         } else if (s.kind === "arrow") {
-          ctx.strokeStyle = "#ff3b30";
-
-          const x1 = dx + s.x1 * dw;
-          const y1 = dy + s.y1 * dh;
-          const x2 = dx + s.x2 * dw;
-          const y2 = dy + s.y2 * dh;
+          const { x1, y1, x2, y2 } = s;
+          const head = 18;
+          const angle = Math.atan2(y2 - y1, x2 - x1);
 
           ctx.beginPath();
           ctx.moveTo(x1, y1);
           ctx.lineTo(x2, y2);
           ctx.stroke();
 
-          const angle = Math.atan2(y2 - y1, x2 - x1);
-          const head = 14;
-
           ctx.beginPath();
           ctx.moveTo(x2, y2);
-          ctx.lineTo(x2 - head * Math.cos(angle - Math.PI / 7), y2 - head * Math.sin(angle - Math.PI / 7));
-          ctx.lineTo(x2 - head * Math.cos(angle + Math.PI / 7), y2 - head * Math.sin(angle + Math.PI / 7));
+          ctx.lineTo(x2 - head * Math.cos(angle - Math.PI / 6), y2 - head * Math.sin(angle - Math.PI / 6));
+          ctx.lineTo(x2 - head * Math.cos(angle + Math.PI / 6), y2 - head * Math.sin(angle + Math.PI / 6));
           ctx.closePath();
           ctx.fillStyle = "#ff3b30";
           ctx.fill();
@@ -543,70 +522,70 @@ export default function ShareClient({ code }: { code: string }) {
                 </div>
 
                 <div className="mt-2 text-[11px] text-slate-500">
-                  Dit schakelt het kind automatisch terug naar jouw PC-scherm (en start schermdelen als dat nog niet aan stond).
+                  Dit schakelt het kind automatisch terug naar jouw PC-scherm (en start schermdelen als dat nog niet aan staat).
                 </div>
               </div>
             ) : (
-              <div className="mt-4 rounded-2xl border bg-slate-50 p-4">
-                <div className="flex flex-col gap-3">
-                  <div className="text-sm text-slate-700">
-                    1) Klik hieronder op “Maak QR-code” <br />
-                    2) Scan met je telefoon <br />
-                    3) Druk op je telefoon op “Start camera”
-                  </div>
-
-                  <div className="flex gap-2 flex-wrap">
-                    <Button
-                      variant="primary"
-                      onClick={async () => {
-                        await createPhoneCameraLink();
-                      }}
-                      disabled={camLoading}
-                    >
-                      {camLoading ? "Bezig…" : "Maak QR-code"}
-                    </Button>
-
-                    {camLink ? (
-                      <Button
-                        variant="secondary"
-                        onClick={async () => {
-                          await copy(camLink);
-                        }}
-                      >
-                        Kopieer link
+              <>
+                {/* QR/link-mode */}
+                <div className="mt-4">
+                  {!camLink ? (
+                    <div className="flex items-center justify-between gap-3">
+                      <Button variant="primary" onClick={createPhoneCameraLink} disabled={camLoading}>
+                        {camLoading ? "Link maken…" : "Maak QR / link"}
                       </Button>
-                    ) : null}
-                  </div>
+                      <div className="text-xs text-slate-500">Link verloopt na ±30 minuten.</div>
+                    </div>
+                  ) : null}
 
-                  {camError ? <div className="text-sm text-red-600">{camError}</div> : null}
+                  {camError ? (
+                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{camError}</div>
+                  ) : null}
 
                   {camLink ? (
-                    <div className="mt-2 flex items-start gap-4 flex-wrap">
-                      <img src={qrUrl(camLink)} alt="QR" className="w-[240px] h-[240px] rounded-xl border bg-white" />
-                      <div className="text-xs text-slate-600 max-w-[260px]">
-                        <div className="font-semibold text-slate-700">Tip</div>
-                        <div className="mt-1">
-                          Zorg dat je telefoon op hetzelfde wifi-netwerk zit. Als dat niet kan: het werkt meestal ook met 4G/5G, maar kan trager zijn.
-                        </div>
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                      <div className="rounded-xl border bg-slate-50 p-3">
+                        <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
+                        <div className="text-xs text-slate-500 mt-2">Scan met iPhone/Android camera app of QR scanner.</div>
+                      </div>
 
-                        <div className="mt-3 text-slate-500 break-all">
-                          <div className="font-semibold text-slate-700">Link</div>
-                          {camLink}
+                      <div className="rounded-xl border p-3">
+                        <div className="text-sm font-medium">Koppellink</div>
+                        <div className="mt-2 break-all text-xs text-slate-700">{camLink}</div>
+                        <div className="mt-3 flex gap-2">
+                          <Button onClick={() => copy(camLink)} className="flex-1">
+                            Kopieer link
+                          </Button>
+                          <Button
+                            onClick={() => {
+                              setCamLink("");
+                              setCamError("");
+                            }}
+                            className="w-28"
+                          >
+                            Vernieuw
+                          </Button>
                         </div>
+                        <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
                       </div>
                     </div>
                   ) : null}
 
-                  <div className="mt-2 rounded-xl bg-white p-3 text-xs text-slate-600">
-                    <div>
-                      Huidige bron: <span className="font-semibold">{activeSource === "screen" ? "PC" : activeSource === "camera" ? "Telefoon" : "Niets"}</span>
-                      {(activeSource as string) === "camera" ? (
-                        <span className="text-slate-400"> (wacht op “Start camera” op telefoon)</span>
-                      ) : null}
-                    </div>
+                  <div className="mt-4 text-xs text-slate-500">
+                    Kind ziet nu:{" "}
+                    <span className="font-semibold">
+                      {activeSource === "screen"
+                        ? "Scherm"
+                        : (activeSource as string) === "camera"
+                          ? "Telefoon"
+                          : "Niets"}
+                    </span>
+                    {(activeSource as string) === "camera" ? (
+                      <span className="text-slate-400"> (wacht op “Start camera” op telefoon)</span>
+                    ) : null}
                   </div>
                 </div>
-              </div>
+              </>
             )}
           </div>
         </div>
@@ -641,8 +620,7 @@ export default function ShareClient({ code }: { code: string }) {
                       setCamLink("");
                       setCamLoading(false);
 
-                      // We laten het kind juist nog het PC-scherm zien (met de QR overlay).
-                      // De telefoonpagina schakelt later pas naar 'camera' zodra de camera echt gestart is.
+                      // ✅ FIX: kind blijft PC zien (met QR overlay). Telefoonpagina zet later pas 'camera' zodra hij echt start.
                       await broadcastActiveSource("screen");
                     }}
                   >
@@ -711,45 +689,26 @@ export default function ShareClient({ code }: { code: string }) {
                         <button
                           key={p.id}
                           onClick={() => setActivePacketId(p.id)}
-                          className={`rounded-xl border p-2 text-left ${
-                            activePacketId === p.id ? "border-white/40 bg-white/10" : "border-white/10 hover:border-white/30"
+                          className={`text-left rounded-xl border px-3 py-2 ${
+                            p.id === activePacketId
+                              ? "bg-white text-black"
+                              : "bg-transparent text-white/90 border-white/20"
                           }`}
                         >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="text-xs font-semibold">
-                              {new Date(p.createdAt).toLocaleTimeString()}{" "}
-                              {!p.seen ? <span className="ml-2 rounded bg-yellow-500/20 px-1.5 py-0.5 text-[10px]">Nieuw</span> : null}
-                            </div>
+                          <div className="text-xs opacity-80">
+                            {new Date(p.createdAt).toLocaleTimeString()}
+                            {!p.seen ? " • nieuw" : ""}
                           </div>
-
-                          <div className="mt-2 w-full aspect-video rounded-lg overflow-hidden bg-black">
-                            <img src={p.snapshotJpeg} alt="snapshot" className="h-full w-full object-cover" />
-                          </div>
+                          <div className="text-sm font-medium">Snapshot</div>
                         </button>
                       ))}
+                    {packets.length === 0 ? <div className="text-xs opacity-70">Nog geen snapshots.</div> : null}
                   </div>
                 </div>
 
-                <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
-                  <div className="text-xs opacity-80">Geselecteerde snapshot</div>
-                  <div ref={snapshotWrapRef} className="mt-2 w-full aspect-video rounded-xl overflow-hidden bg-black relative">
-                    <canvas ref={snapshotCanvasRef} className="absolute inset-0 h-full w-full" />
-                    {!activePacketId ? (
-                      <div className="absolute inset-0 flex items-center justify-center text-white/60 text-sm">Selecteer een snapshot</div>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
-                  <div className="text-xs opacity-80">Actieve bron</div>
-                  <div className="mt-1">
-                    <span className="font-semibold">
-                      {activeSource === "screen" ? "PC scherm" : activeSource === "camera" ? "Telefoon camera" : "Geen"}
-                    </span>
-                    {activeSource === "camera" && !phoneIsLive ? (
-                      <span className="text-white/60"> • wacht op telefoon…</span>
-                    ) : null}
-                  </div>
+                <div ref={snapshotWrapRef} className="rounded-xl bg-white/10 p-3">
+                  <div className="text-white text-xs opacity-80 mb-2">Snapshot viewer</div>
+                  <canvas ref={snapshotCanvasRef} className="w-full rounded-lg bg-black/40" />
                 </div>
               </div>
             </div>
