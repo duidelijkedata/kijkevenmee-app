@@ -142,7 +142,7 @@ useEffect(() => {
       }
 
       if (msg.type === "active_source") {
-        setActiveSourceState(msg.source);
+        setActiveSource(msg.source);
         return;
       }
 
