@@ -81,7 +81,9 @@ export default function ShareClient({ code }: { code: string }) {
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const origin =
-    typeof window !== "undefined" && window.location?.origin ? window.location.origin : "https://kijkevenmee-app.vercel.app";
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "https://kijkevenmee-app.vercel.app";
 
   // ====== NIEUW: telefoon camera modal state ======
   const [camOpen, setCamOpen] = useState(false);
@@ -90,7 +92,6 @@ export default function ShareClient({ code }: { code: string }) {
   const [camLink, setCamLink] = useState<string>("");
 
   function qrUrl(data: string) {
-    // 3rd party QR image service — fallback is always: copy/paste link
     const size = "240x240";
     return `https://api.qrserver.com/v1/create-qr-code/?size=${size}&data=${encodeURIComponent(data)}`;
   }
@@ -366,16 +367,14 @@ export default function ShareClient({ code }: { code: string }) {
     }
   }
 
-  // ===== Snapshot viewer rendering (zoals je al had) =====
+  // ===== Snapshot viewer rendering =====
   useEffect(() => {
     if (!activePacketId) return;
     const p = packets.find((x) => x.id === activePacketId);
     if (!p) return;
 
-    // mark seen
     setPackets((prev) => prev.map((x) => (x.id === p.id ? { ...x, seen: true } : x)));
 
-    // draw snapshot
     const canvas = snapshotCanvasRef.current;
     if (!canvas) return;
 
@@ -391,7 +390,6 @@ export default function ShareClient({ code }: { code: string }) {
       ctx.clearRect(0, 0, w, h);
       ctx.drawImage(img, 0, 0, w, h);
 
-      // shapes
       ctx.lineWidth = 6;
       ctx.strokeStyle = "#ff3b30";
       ctx.fillStyle = "rgba(255,59,48,0.15)";
@@ -408,7 +406,6 @@ export default function ShareClient({ code }: { code: string }) {
           ctx.fill();
           ctx.stroke();
         } else if (s.kind === "arrow") {
-          // basic arrow
           const { x1, y1, x2, y2 } = s;
           const head = 18;
           const angle = Math.atan2(y2 - y1, x2 - x1);
@@ -434,8 +431,8 @@ export default function ShareClient({ code }: { code: string }) {
   }, [activePacketId, packets]);
 
   return (
-  <FullscreenShell sidebar={null}>
-      {/* ====== NIEUW: Modal voor Telefoon camera ====== */}
+    <FullscreenShell sidebar={null}>
+      {/* ====== Modal voor Telefoon camera ====== */}
       {camOpen ? (
         <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
@@ -461,9 +458,7 @@ export default function ShareClient({ code }: { code: string }) {
                   <Button variant="primary" onClick={createPhoneCameraLink} disabled={camLoading}>
                     {camLoading ? "Link maken…" : "Maak QR / link"}
                   </Button>
-                  <div className="text-xs text-slate-500">
-                    Link verloopt na ±30 minuten.
-                  </div>
+                  <div className="text-xs text-slate-500">Link verloopt na ±30 minuten.</div>
                 </div>
               ) : null}
 
@@ -475,9 +470,7 @@ export default function ShareClient({ code }: { code: string }) {
                 <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                   <div className="rounded-xl border bg-slate-50 p-3">
                     <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
-                    <div className="text-xs text-slate-500 mt-2">
-                      Werkt met iPhone/Android camera app of QR scanner.
-                    </div>
+                    <div className="text-xs text-slate-500 mt-2">Werkt met iPhone/Android camera app of QR scanner.</div>
                   </div>
 
                   <div className="rounded-xl border p-3">
@@ -497,9 +490,7 @@ export default function ShareClient({ code }: { code: string }) {
                         Vernieuw
                       </Button>
                     </div>
-                    <div className="mt-3 text-xs text-slate-500">
-                      Tip: open de link op de telefoon en kies “Sta camera toe”.
-                    </div>
+                    <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
                   </div>
                 </div>
               ) : null}
@@ -508,117 +499,122 @@ export default function ShareClient({ code }: { code: string }) {
         </div>
       ) : null}
 
-      {/* ====== Bestaande UI ====== */}
+      {/* ====== UI ====== */}
       <div className="h-screen w-screen bg-black">
-        <ViewerStage
-          left={
-            <div className="p-3 flex flex-col gap-3">
-              <div className="text-white text-sm font-semibold">Ouder – scherm delen</div>
+        {/* ViewerStage accepteert volgens TS alleen children → daarom layout hierbinnen */}
+        <ViewerStage>
+          <div className="h-full w-full grid grid-cols-1 lg:grid-cols-[360px_1fr_360px]">
+            {/* LEFT */}
+            <div className="min-w-0 border-b lg:border-b-0 lg:border-r border-white/10">
+              <div className="p-3 flex flex-col gap-3">
+                <div className="text-white text-sm font-semibold">Ouder – scherm delen</div>
 
-              <div className="flex gap-2 flex-wrap">
-                <Button variant="primary" onClick={startShare} disabled={status === "sharing" || status === "connected"}>
-                  Start delen
-                </Button>
-                <Button onClick={stopShare} disabled={status === "idle"}>
-                  Stop
-                </Button>
+                <div className="flex gap-2 flex-wrap">
+                  <Button variant="primary" onClick={startShare} disabled={status === "sharing" || status === "connected"}>
+                    Start delen
+                  </Button>
+                  <Button onClick={stopShare} disabled={status === "idle"}>
+                    Stop
+                  </Button>
 
-                {/* NIEUW: telefoon camera */}
-                <Button
-                  onClick={() => {
-                    setCamOpen(true);
-                    setCamError("");
-                    setCamLink("");
-                    setCamLoading(false);
-                  }}
-                >
-                  Telefoon als camera
-                </Button>
-              </div>
-
-              <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
-                <div>Status: <span className="font-semibold">{status}</span></div>
-                {debugLine ? <div className="mt-1 text-xs opacity-80">{debugLine}</div> : null}
-              </div>
-
-              <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
-                <div className="font-semibold">Kwaliteit</div>
-                <div className="mt-2 flex gap-2 flex-wrap">
-                  {(["low", "medium", "high"] as Quality[]).map((q) => (
-                    <Button
-                      key={q}
-                      variant={quality === q ? "primary" : "secondary"}
-                      onClick={async () => {
-                        setQuality(q);
-                        const pc = pcRef.current;
-                        if (pc) await applySenderQuality(pc, q);
-                      }}
-                    >
-                      {qualityLabel(q)}
-                    </Button>
-                  ))}
+                  <Button
+                    onClick={() => {
+                      setCamOpen(true);
+                      setCamError("");
+                      setCamLink("");
+                      setCamLoading(false);
+                    }}
+                  >
+                    Telefoon als camera
+                  </Button>
                 </div>
 
-                <label className="mt-3 flex items-center gap-2 text-xs opacity-90 select-none">
-                  <input
-                    type="checkbox"
-                    checked={auto}
-                    onChange={(e) => setAuto(e.target.checked)}
-                  />
-                  Auto (placeholder voor later)
-                </label>
+                <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
+                  <div>
+                    Status: <span className="font-semibold">{status}</span>
+                  </div>
+                  {debugLine ? <div className="mt-1 text-xs opacity-80">{debugLine}</div> : null}
+                </div>
 
-                <label className="mt-2 flex items-center gap-2 text-xs opacity-90 select-none">
-                  <input
-                    type="checkbox"
-                    checked={showPreview}
-                    onChange={(e) => setShowPreview(e.target.checked)}
-                  />
-                  Preview tonen (kan mirror-effect geven)
-                </label>
-              </div>
-            </div>
-          }
-          center={
-            <div className="h-full w-full flex items-center justify-center">
-              {/* preview is optioneel */}
-              <video ref={videoRef} className="max-h-full max-w-full" />
-            </div>
-          }
-          right={
-            <div className="p-3 flex flex-col gap-3">
-              <div className="text-white text-sm font-semibold">Aantekeningen van kind</div>
+                <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
+                  <div className="font-semibold">Kwaliteit</div>
+                  <div className="mt-2 flex gap-2 flex-wrap">
+                    {(["low", "medium", "high"] as Quality[]).map((q) => (
+                      <Button
+                        key={q}
+                        variant={quality === q ? "primary" : "secondary"}
+                        onClick={async () => {
+                          setQuality(q);
+                          const pc = pcRef.current;
+                          if (pc) await applySenderQuality(pc, q);
+                        }}
+                      >
+                        {qualityLabel(q)}
+                      </Button>
+                    ))}
+                  </div>
 
-              <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
-                <div className="text-xs opacity-80">Laatste snapshots</div>
+                  <label className="mt-3 flex items-center gap-2 text-xs opacity-90 select-none">
+                    <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+                    Auto (placeholder voor later)
+                  </label>
 
-                <div className="mt-2 flex flex-col gap-2 max-h-[40vh] overflow-auto pr-1">
-                  {packets.slice().reverse().map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => setActivePacketId(p.id)}
-                      className={`text-left rounded-xl border px-3 py-2 ${
-                        p.id === activePacketId ? "bg-white text-black" : "bg-transparent text-white/90 border-white/20"
-                      }`}
-                    >
-                      <div className="text-xs opacity-80">
-                        {new Date(p.createdAt).toLocaleTimeString()}
-                        {!p.seen ? " • nieuw" : ""}
-                      </div>
-                      <div className="text-sm font-medium">Snapshot</div>
-                    </button>
-                  ))}
-                  {packets.length === 0 ? <div className="text-xs opacity-70">Nog geen snapshots.</div> : null}
+                  <label className="mt-2 flex items-center gap-2 text-xs opacity-90 select-none">
+                    <input type="checkbox" checked={showPreview} onChange={(e) => setShowPreview(e.target.checked)} />
+                    Preview tonen (kan mirror-effect geven)
+                  </label>
                 </div>
               </div>
+            </div>
 
-              <div ref={snapshotWrapRef} className="rounded-xl bg-white/10 p-3">
-                <div className="text-white text-xs opacity-80 mb-2">Snapshot viewer</div>
-                <canvas ref={snapshotCanvasRef} className="w-full rounded-lg bg-black/40" />
+            {/* CENTER */}
+            <div className="min-w-0 flex items-center justify-center">
+              <div className="h-full w-full flex items-center justify-center">
+                <video ref={videoRef} className="max-h-full max-w-full" />
               </div>
             </div>
-          }
-        />
+
+            {/* RIGHT */}
+            <div className="min-w-0 border-t lg:border-t-0 lg:border-l border-white/10">
+              <div className="p-3 flex flex-col gap-3">
+                <div className="text-white text-sm font-semibold">Aantekeningen van kind</div>
+
+                <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
+                  <div className="text-xs opacity-80">Laatste snapshots</div>
+
+                  <div className="mt-2 flex flex-col gap-2 max-h-[40vh] overflow-auto pr-1">
+                    {packets
+                      .slice()
+                      .reverse()
+                      .map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => setActivePacketId(p.id)}
+                          className={`text-left rounded-xl border px-3 py-2 ${
+                            p.id === activePacketId
+                              ? "bg-white text-black"
+                              : "bg-transparent text-white/90 border-white/20"
+                          }`}
+                        >
+                          <div className="text-xs opacity-80">
+                            {new Date(p.createdAt).toLocaleTimeString()}
+                            {!p.seen ? " • nieuw" : ""}
+                          </div>
+                          <div className="text-sm font-medium">Snapshot</div>
+                        </button>
+                      ))}
+                    {packets.length === 0 ? <div className="text-xs opacity-70">Nog geen snapshots.</div> : null}
+                  </div>
+                </div>
+
+                <div ref={snapshotWrapRef} className="rounded-xl bg-white/10 p-3">
+                  <div className="text-white text-xs opacity-80 mb-2">Snapshot viewer</div>
+                  <canvas ref={snapshotCanvasRef} className="w-full rounded-lg bg-black/40" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </ViewerStage>
       </div>
     </FullscreenShell>
   );
