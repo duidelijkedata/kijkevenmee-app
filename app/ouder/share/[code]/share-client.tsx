@@ -675,9 +675,10 @@ export default function ShareClient({ code }: { code: string }) {
                   {camStatusText ? <span className="ml-2 text-slate-500">• {camStatusText}</span> : null}
                 </div>
 
-                <div className="mt-3 rounded-xl overflow-hidden bg-black aspect-video">
-                  <video ref={camVideoRef} className="w-full h-full object-contain" />
-                </div>
+                <div className="mt-3 mx-auto w-full max-w-[320px] rounded-xl overflow-hidden bg-black aspect-[9/16]">
+  <video ref={camVideoRef} className="w-full h-full object-cover" />
+</div>
+
 
                 <div className="mt-2 text-xs text-slate-500">
                   Zie je zwart beeld? Start de camera op je telefoon (en geef cameratoestemming).
