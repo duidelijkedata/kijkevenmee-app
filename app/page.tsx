@@ -32,19 +32,20 @@ export default function OuderStart() {
   const [created, setCreated] = useState<{ code: string } | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // ✅ Alleen nodig voor scenario "GEEN code": we moeten een gekoppeld kind (helper) kunnen kiezen.
   const [linkedChildren, setLinkedChildren] = useState<LinkedChild[]>([]);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
 
+  // ✅ debug: login status
+  const [parentUserId, setParentUserId] = useState<string | null>(null);
+  const [relatedUsersStatus, setRelatedUsersStatus] = useState<"idle" | "ok" | "unauth" | "error">("idle");
+
   useEffect(() => {
     (async () => {
-      // Ouder kan ook zonder login een code-sessie starten; dus dit is "best effort".
       const { data } = await supabase.auth.getUser();
       const uid = data?.user?.id ?? null;
+      setParentUserId(uid);
       if (!uid) return;
 
-      // ✅ BELANGRIJK: relaties kunnen in beide richtingen opgeslagen zijn.
-      // Daarom: helper_id = uid OF child_id = uid, en pak "de andere kant".
       const { data: rels, error: relErr } = await supabase
         .from("helper_relationships")
         .select("child_id, helper_id")
@@ -56,23 +57,35 @@ export default function OuderStart() {
       for (const r of (rels ?? []) as RelationshipRow[]) {
         const helperId = r.helper_id ?? null;
         const childId = r.child_id ?? null;
-
-        // pak de tegenpartij van uid
         if (helperId === uid && childId) relatedIds.add(childId);
         if (childId === uid && helperId) relatedIds.add(helperId);
       }
 
       const ids = Array.from(relatedIds).filter(Boolean);
-      if (!ids.length) return;
+      if (!ids.length) {
+        setLinkedChildren([]);
+        setSelectedChildId(null);
+        return;
+      }
 
-      const r = await fetch("/api/related-users", {
+      const resp = await fetch("/api/related-users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
       });
 
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) return;
+      if (resp.status === 401) {
+        setRelatedUsersStatus("unauth");
+        return;
+      }
+
+      const j = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setRelatedUsersStatus("error");
+        return;
+      }
+
+      setRelatedUsersStatus("ok");
 
       const users: RelatedUser[] = Array.isArray(j?.users) ? (j.users as RelatedUser[]) : [];
       const byId = new Map<string, RelatedUser>(users.map((u) => [u.id, u]));
@@ -104,10 +117,15 @@ export default function OuderStart() {
     setLoading(true);
     setCreated(null);
 
-    // Als we een gekoppeld kind hebben geselecteerd en die heeft "code uit",
-    // dan maken we een sessie die is toegewezen aan dat kind (helper_id),
-    // zodat het kind hem direct ziet bij /kind/verbinden zonder iets te typen.
-    const shouldAssignToChild = Boolean(selectedChild && !selectedChild.use_koppelcode);
+    const shouldAssignToChild = Boolean(selectedChild && selectedChild.use_koppelcode === false);
+
+    // ✅ debug in console: zie je dit in DevTools?
+    console.log("[ouder/start]", {
+      parentUserId,
+      selectedChildId,
+      selectedChild,
+      shouldAssignToChild,
+    });
 
     const res = await fetch("/api/sessions/create-parent", {
       method: "POST",
@@ -128,12 +146,10 @@ export default function OuderStart() {
     if (!code) return alert("Sessie is gemaakt maar code ontbreekt.");
 
     if (shouldAssignToChild) {
-      // ✅ Scenario GEEN code: geen code tonen op /ouder; ga direct naar schermdelen.
       router.push(`/ouder/share/${code}`);
       return;
     }
 
-    // ✅ Scenario WEL code: toon zoals voorheen op /ouder.
     setCreated({ code });
   }
 
@@ -145,6 +161,11 @@ export default function OuderStart() {
         `Meekijken code: ${created.code.slice(0, 3)} ${created.code.slice(3)}\n\nKind opent: ${kidUrl}\n\nOuder scherm delen: ${shareUrl}`
       )
     : "";
+
+  const debugLine =
+    parentUserId
+      ? `Ingelogd (uid: ${parentUserId.slice(0, 8)}…), linkedChildren: ${linkedChildren.length}, related-users: ${relatedUsersStatus}`
+      : `NIET ingelogd → "zonder code" kan niet werken, dus altijd code`;
 
   return (
     <main className="mx-auto max-w-2xl space-y-6">
@@ -180,6 +201,9 @@ export default function OuderStart() {
       {!created ? (
         <Card>
           <div className="space-y-3">
+            {/* mini debug */}
+            <p className="text-xs text-slate-500">{debugLine}</p>
+
             {linkedChildren.length ? (
               <div>
                 <label className="block text-sm font-medium text-slate-700">Kies je kind</label>
