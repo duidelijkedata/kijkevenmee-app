@@ -40,7 +40,6 @@ function qualityLabel(q: Quality) {
   return "Hoog (meest scherp)";
 }
 
-/** hogere bitrate + maintain-resolution */
 function qualityParams(q: Quality) {
   if (q === "low") return { maxBitrate: 2_500_000, idealFps: 15, maxFps: 20 };
   if (q === "medium") return { maxBitrate: 8_000_000, idealFps: 30, maxFps: 30 };
@@ -55,13 +54,10 @@ export default function ShareClient({ code }: { code: string }) {
   const [auto, setAuto] = useState(true);
   const [debugLine, setDebugLine] = useState("");
 
-  // default UIT: voorkomt scherm-in-scherm loop
   const [showPreview, setShowPreview] = useState(false);
 
-  // preview video voor screenshare (optioneel)
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-
   const pcRef = useRef<RTCPeerConnection | null>(null);
 
   const channelRef = useRef<any>(null);
@@ -71,11 +67,10 @@ export default function ShareClient({ code }: { code: string }) {
   const lastBytesSentRef = useRef<number | null>(null);
   const lastStatsAtRef = useRef<number | null>(null);
 
-  // packets van kind
   const [packets, setPackets] = useState<PacketState[]>([]);
   const [activePacketId, setActivePacketId] = useState<string | null>(null);
 
-  // Snapshot viewer refs
+  const snapshotWrapRef = useRef<HTMLDivElement | null>(null);
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const origin =
@@ -83,31 +78,20 @@ export default function ShareClient({ code }: { code: string }) {
       ? window.location.origin
       : "https://kijkevenmee-app.vercel.app";
 
-  // ===== Telefoon camera overlay =====
+  // ====== Telefoon camera overlay ======
   const [camOpen, setCamOpen] = useState(false);
   const [camLoading, setCamLoading] = useState(false);
   const [camError, setCamError] = useState<string>("");
   const [camLink, setCamLink] = useState<string>("");
+
   const [activeSource, setActiveSource] = useState<ActiveSource>("screen");
 
-  // preview frames (jpeg) vanuit telefoon (via broadcast)
+  // preview frames (jpeg frames via broadcast)
   const [camPreviewJpeg, setCamPreviewJpeg] = useState<string>("");
   const [camPreviewAt, setCamPreviewAt] = useState<number>(0);
 
-  // “camera actief” = er is recent preview binnengekomen
-  const [camActive, setCamActive] = useState(false);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      if (!camPreviewAt) {
-        setCamActive(false);
-        return;
-      }
-      const age = Date.now() - camPreviewAt;
-      setCamActive(age < 4500); // als er >4.5s niks binnenkomt: niet actief
-    }, 750);
-    return () => clearInterval(t);
-  }, [camPreviewAt]);
+  // "live" heuristiek: zodra source=camera OF we krijgen preview frames, gaan we naar live overlay
+  const phoneIsLive = activeSource === "camera" || !!camPreviewJpeg;
 
   async function broadcastActiveSource(source: ActiveSource) {
     setActiveSource(source);
@@ -143,7 +127,7 @@ export default function ShareClient({ code }: { code: string }) {
       const url = `${origin}/ouder/camera?token=${encodeURIComponent(json.token)}`;
       setCamLink(url);
       setCamLoading(false);
-    } catch (e) {
+    } catch {
       setCamError("Netwerkfout bij aanmaken telefoon-link.");
       setCamLoading(false);
     }
@@ -155,7 +139,7 @@ export default function ShareClient({ code }: { code: string }) {
     } catch {}
   }
 
-  // ===== Main signaling channel =====
+  // ===== Signaling =====
   useEffect(() => {
     const ch = supabase.channel(`signal:${code}`);
     channelRef.current = ch;
@@ -212,12 +196,11 @@ export default function ShareClient({ code }: { code: string }) {
       }
     });
 
-    void ch.subscribe();
+    ch.subscribe();
 
-    // cleanup moet sync
     return () => {
       try {
-        void supabase.removeChannel(ch);
+        supabase.removeChannel(ch);
       } catch {}
     };
   }, [supabase, code]);
@@ -250,7 +233,6 @@ export default function ShareClient({ code }: { code: string }) {
     await sender.setParameters(params);
     await broadcastQuality(q);
 
-    // update capture fps (best effort)
     try {
       const t = sender.track as any;
       if (t?.applyConstraints) {
@@ -376,7 +358,6 @@ export default function ShareClient({ code }: { code: string }) {
 
       pc.addTrack(track, stream);
 
-      // preview optioneel (om mirror te voorkomen)
       if (videoRef.current) {
         if (showPreview) {
           videoRef.current.srcObject = stream;
@@ -476,7 +457,10 @@ export default function ShareClient({ code }: { code: string }) {
     await broadcastActiveSource("screen");
     setCamOpen(false);
 
-    // als er nog geen screenshare loopt, start die
+    // reset preview state zodat volgende keer QR weer zichtbaar is tot er nieuw beeld is
+    setCamPreviewJpeg("");
+    setCamPreviewAt(0);
+
     if (status === "idle") {
       await startShare();
     }
@@ -484,7 +468,7 @@ export default function ShareClient({ code }: { code: string }) {
 
   return (
     <FullscreenShell sidebar={null}>
-      {/* ====== Telefoon overlay: QR eerst, zodra camera actief -> alleen preview + stop ====== */}
+      {/* ====== Telefoon overlay ====== */}
       {camOpen ? (
         <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4">
           <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-xl">
@@ -492,9 +476,9 @@ export default function ShareClient({ code }: { code: string }) {
               <div>
                 <div className="text-lg font-semibold">Telefoon als extra camera</div>
                 <div className="text-sm text-slate-600 mt-1">
-                  {!camActive
-                    ? "Scan de QR-code met je telefoon en start daar de camera."
-                    : "Live beeld (telefoon) — dit ziet het kind ook."}
+                  {phoneIsLive
+                    ? "Live beeld is actief. Je ziet hier wat het kind ziet."
+                    : "Scan de QR-code met je telefoon en start daar de camera. Het kind kan je hierbij begeleiden."}
                 </div>
               </div>
               <button
@@ -506,65 +490,15 @@ export default function ShareClient({ code }: { code: string }) {
               </button>
             </div>
 
-            {/* ====== FASE 1: nog geen camera -> alleen QR / link ====== */}
-            {!camActive ? (
-              <div className="mt-4">
-                {!camLink ? (
-                  <div className="flex items-center justify-between gap-3">
-                    <Button variant="primary" onClick={createPhoneCameraLink} disabled={camLoading}>
-                      {camLoading ? "Link maken…" : "Maak QR / link"}
-                    </Button>
-                    <div className="text-xs text-slate-500">Link verloopt na ±30 minuten.</div>
-                  </div>
-                ) : null}
-
-                {camError ? (
-                  <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{camError}</div>
-                ) : null}
-
-                {camLink ? (
-                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-                    <div className="rounded-xl border bg-slate-50 p-3">
-                      <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
-                      <div className="text-xs text-slate-500 mt-2">Scan met iPhone/Android camera app of QR scanner.</div>
-                    </div>
-
-                    <div className="rounded-xl border p-3">
-                      <div className="text-sm font-medium">Koppellink</div>
-                      <div className="mt-2 break-all text-xs text-slate-700">{camLink}</div>
-                      <div className="mt-3 flex gap-2">
-                        <Button onClick={() => copy(camLink)} className="flex-1">
-                          Kopieer link
-                        </Button>
-                        <Button
-                          onClick={() => {
-                            setCamLink("");
-                            setCamError("");
-                          }}
-                          className="w-28"
-                        >
-                          Vernieuw
-                        </Button>
-                      </div>
-                      <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="mt-4 text-xs text-slate-500">
-                  Kind ziet nu:{" "}
-                  <span className="font-semibold">
-                    {activeSource === "camera" ? "Telefoon" : activeSource === "screen" ? "Scherm" : "Niets"}
-                  </span>
-                </div>
-              </div>
-            ) : (
-              /* ====== FASE 2: camera actief -> alleen preview + stop ====== */
-              <div className="mt-4">
+            {/* ===== Live-mode: alleen preview + stop ===== */}
+            {phoneIsLive ? (
+              <div className="mt-4 rounded-2xl border bg-slate-50 p-3">
                 <div className="text-xs text-slate-600 mb-2 flex items-center justify-between">
                   <span>
                     Live preview{" "}
-                    {camPreviewAt ? <span className="text-slate-400">• {new Date(camPreviewAt).toLocaleTimeString()}</span> : null}
+                    {camPreviewAt ? (
+                      <span className="text-slate-400">• {new Date(camPreviewAt).toLocaleTimeString()}</span>
+                    ) : null}
                   </span>
                   <span className="text-slate-400">portrait</span>
                 </div>
@@ -576,11 +510,10 @@ export default function ShareClient({ code }: { code: string }) {
                         src={camPreviewJpeg}
                         alt="Live preview"
                         className="absolute inset-0 h-full w-full object-cover"
-                        style={{ transform: "translateZ(0)" }}
                       />
                     ) : (
-                      <div className="absolute inset-0 flex items-center justify-center text-white/70 text-sm">
-                        Wachten op beeld…
+                      <div className="absolute inset-0 flex items-center justify-center text-white/70 text-sm px-6 text-center">
+                        Camera is gestart. Wacht op het eerste beeld…
                       </div>
                     )}
                   </div>
@@ -593,15 +526,77 @@ export default function ShareClient({ code }: { code: string }) {
                 </div>
 
                 <div className="mt-2 text-[11px] text-slate-500">
-                  Dit schakelt het kind automatisch terug naar jouw PC-scherm (en start schermdelen als dat nog niet aan staat).
+                  Dit schakelt het kind automatisch terug naar jouw PC-scherm (en start schermdelen als dat nog niet aan
+                  staat).
                 </div>
               </div>
+            ) : (
+              <>
+                {/* ===== QR/link-mode ===== */}
+                <div className="mt-4">
+                  {!camLink ? (
+                    <div className="flex items-center justify-between gap-3">
+                      <Button variant="primary" onClick={createPhoneCameraLink} disabled={camLoading}>
+                        {camLoading ? "Link maken…" : "Maak QR / link"}
+                      </Button>
+                      <div className="text-xs text-slate-500">Link verloopt na ±30 minuten.</div>
+                    </div>
+                  ) : null}
+
+                  {camError ? (
+                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{camError}</div>
+                  ) : null}
+
+                  {camLink ? (
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                      <div className="rounded-xl border bg-slate-50 p-3">
+                        <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
+                        <div className="text-xs text-slate-500 mt-2">
+                          Scan met iPhone/Android camera app of QR scanner.
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border p-3">
+                        <div className="text-sm font-medium">Koppellink</div>
+                        <div className="mt-2 break-all text-xs text-slate-700">{camLink}</div>
+                        <div className="mt-3 flex gap-2">
+                          <Button onClick={() => copy(camLink)} className="flex-1">
+                            Kopieer link
+                          </Button>
+                          <Button
+                            onClick={() => {
+                              setCamLink("");
+                              setCamError("");
+                            }}
+                            className="w-28"
+                          >
+                            Vernieuw
+                          </Button>
+                        </div>
+                        <div className="mt-3 text-xs text-slate-500">
+                          Tip: open de link op de telefoon en kies “Sta camera toe”.
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 text-xs text-slate-500">
+                    Kind ziet nu:{" "}
+                    <span className="font-semibold">
+                      {activeSource === "camera" ? "Telefoon" : activeSource === "screen" ? "Scherm" : "Niets"}
+                    </span>
+                    {activeSource === "camera" ? (
+                      <span className="text-slate-400"> (wacht op “Start camera” op telefoon)</span>
+                    ) : null}
+                  </div>
+                </div>
+              </>
             )}
           </div>
         </div>
       ) : null}
 
-      {/* ====== Bestaande UI (terug!) ====== */}
+      {/* ====== UI ====== */}
       <div className="h-screen w-screen bg-black">
         <ViewerStage>
           <div className="h-full w-full grid grid-cols-1 lg:grid-cols-[360px_1fr_360px]">
@@ -619,25 +614,13 @@ export default function ShareClient({ code }: { code: string }) {
                   </Button>
 
                   <Button
-                    onClick={async () => {
+                    onClick={() => {
                       setCamOpen(true);
                       setCamError("");
                       setCamLink("");
                       setCamLoading(false);
-
-                      // bij openen: schakel bron naar camera (kind toont telefoon zodra die er is)
-                      <Button
-  onClick={() => {
-    setCamOpen(true);
-    setCamError("");
-    setCamLink("");
-    setCamLoading(false);
-    // GEEN active_source switch hier.
-  }}
->
-  Telefoon als camera
-</Button>
-
+                      // Belangrijk: hier GEEN switch naar camera.
+                      // We switchen pas wanneer “Start camera” op de telefoon wordt gedrukt.
                     }}
                   >
                     Telefoon als camera
@@ -706,7 +689,9 @@ export default function ShareClient({ code }: { code: string }) {
                           key={p.id}
                           onClick={() => setActivePacketId(p.id)}
                           className={`text-left rounded-xl border px-3 py-2 ${
-                            p.id === activePacketId ? "bg-white text-black" : "bg-transparent text-white/90 border-white/20"
+                            p.id === activePacketId
+                              ? "bg-white text-black"
+                              : "bg-transparent text-white/90 border-white/20"
                           }`}
                         >
                           <div className="text-xs opacity-80">
@@ -720,7 +705,7 @@ export default function ShareClient({ code }: { code: string }) {
                   </div>
                 </div>
 
-                <div className="rounded-xl bg-white/10 p-3">
+                <div ref={snapshotWrapRef} className="rounded-xl bg-white/10 p-3">
                   <div className="text-white text-xs opacity-80 mb-2">Snapshot viewer</div>
                   <canvas ref={snapshotCanvasRef} className="w-full rounded-lg bg-black/40" />
                 </div>
