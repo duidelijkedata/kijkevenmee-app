@@ -10,6 +10,7 @@ import ViewerStage from "@/components/meekijk/ViewerStage";
 
 type Quality = "low" | "medium" | "high";
 type DrawTool = "circle" | "rect" | "arrow";
+type ActiveSource = "screen" | "camera" | "none";
 
 type DraftShape =
   | { kind: "circle"; x: number; y: number; r: number }
@@ -19,7 +20,7 @@ type DraftShape =
 type DrawPacket = {
   id: string;
   createdAt: number;
-  snapshotJpeg: string; // data URL
+  snapshotJpeg: string;
   shapes: DraftShape[];
 };
 
@@ -29,7 +30,15 @@ type SignalMsg =
   | { type: "answer"; sdp: any }
   | { type: "ice"; candidate: any }
   | { type: "quality"; quality: Quality }
-  | { type: "draw_packet"; packet: DrawPacket };
+  | { type: "draw_packet"; packet: DrawPacket }
+  | { type: "active_source"; source: ActiveSource };
+
+// camera channel messages (telefoon)
+type CamSignalMsg =
+  | { type: "hello"; at: number }
+  | { type: "offer"; sdp: any }
+  | { type: "answer"; sdp: any }
+  | { type: "ice"; candidate: any };
 
 function formatCode(v: string) {
   const digits = v.replace(/\D/g, "").slice(0, 6);
@@ -49,7 +58,6 @@ export default function KindVerbinden() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [code, setCode] = useState("");
 
-  // Als 'Meekijken starten met code' UIT staat, tonen we sessies die al aan jou zijn toegewezen.
   const [useKoppelcode, setUseKoppelcode] = useState<boolean>(true);
   const [activeSessions, setActiveSessions] = useState<{ id: string; code: string; created_at?: string }[]>([]);
   const [activeError, setActiveError] = useState<string | null>(null);
@@ -58,7 +66,17 @@ export default function KindVerbinden() {
   const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
   const [remoteQuality, setRemoteQuality] = useState<Quality | null>(null);
 
+  // ✅ actief bron-signaal vanuit ouder
+  const [activeSource, setActiveSource] = useState<ActiveSource>("screen");
+
+  // screen video
   const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // phone camera video
+  const camVideoRef = useRef<HTMLVideoElement | null>(null);
+  const camPcRef = useRef<RTCPeerConnection | null>(null);
+  const camChannelRef = useRef<any>(null);
+
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -66,6 +84,7 @@ export default function KindVerbinden() {
   const channelRef = useRef<any>(null);
 
   const [needsTapToPlay, setNeedsTapToPlay] = useState(false);
+  const [needsTapToPlayCam, setNeedsTapToPlayCam] = useState(false);
 
   // Zoom + pan
   const [zoom, setZoom] = useState(1);
@@ -97,10 +116,6 @@ export default function KindVerbinden() {
     startNY: 0,
   });
 
-  /**
-   * ✅ Zoom zonder CSS transform scale.
-   * We rekenen pan-limits op viewport size * zoom (layout sizing).
-   */
   function clampPan(nextPan: { x: number; y: number }, nextZoom = zoom) {
     const vp = viewportRef.current;
     if (!vp) return nextPan;
@@ -124,6 +139,7 @@ export default function KindVerbinden() {
   }, [zoom]);
 
   async function cleanup() {
+    // screen pc + channel
     try {
       pcRef.current?.close();
     } catch {}
@@ -140,10 +156,29 @@ export default function KindVerbinden() {
       } catch {}
     }
 
+    // camera pc + channel
+    try {
+      camPcRef.current?.close();
+    } catch {}
+    camPcRef.current = null;
+
+    try {
+      if (camChannelRef.current) await supabase.removeChannel(camChannelRef.current);
+    } catch {}
+    camChannelRef.current = null;
+
+    if (camVideoRef.current) {
+      try {
+        (camVideoRef.current as any).srcObject = null;
+      } catch {}
+    }
+
     setNeedsTapToPlay(false);
+    setNeedsTapToPlayCam(false);
     setConnected(false);
     setStatus("idle");
     setRemoteQuality(null);
+    setActiveSource("screen");
   }
 
   useEffect(() => {
@@ -170,7 +205,6 @@ export default function KindVerbinden() {
     }
   }
 
-  // Als de instelling UIT staat, toon sessies die al aan jou (helper) toegewezen zijn.
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getUser();
@@ -195,12 +229,103 @@ export default function KindVerbinden() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function setupCameraReceiver(raw: string) {
+    // cleanup old
+    try {
+      camPcRef.current?.close();
+    } catch {}
+    camPcRef.current = null;
+    try {
+      if (camChannelRef.current) await supabase.removeChannel(camChannelRef.current);
+    } catch {}
+    camChannelRef.current = null;
+
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    camPcRef.current = pc;
+
+    pc.ontrack = (ev) => {
+      const [stream] = ev.streams;
+      if (!stream) return;
+      const v = camVideoRef.current;
+      if (!v) return;
+
+      setNeedsTapToPlayCam(false);
+      v.srcObject = stream;
+      v.muted = true;
+      v.playsInline = true;
+      v.disablePictureInPicture = true;
+
+      const tryPlay = async () => {
+        try {
+          await v.play();
+          setNeedsTapToPlayCam(false);
+        } catch {
+          setNeedsTapToPlayCam(true);
+        }
+      };
+      void tryPlay();
+      v.onloadedmetadata = () => void tryPlay();
+    };
+
+    const ch = supabase.channel(`signalcam:${raw}`);
+    camChannelRef.current = ch;
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        ch.send({
+          type: "broadcast",
+          event: "signal",
+          payload: { type: "ice", candidate: e.candidate } satisfies CamSignalMsg,
+        });
+      }
+    };
+
+    ch.on("broadcast", { event: "signal" }, async (payload: any) => {
+      const msg = payload.payload as CamSignalMsg;
+
+      try {
+        if (!camPcRef.current) return;
+
+        if (msg.type === "offer") {
+          await camPcRef.current.setRemoteDescription(msg.sdp);
+          const answer = await camPcRef.current.createAnswer();
+          await camPcRef.current.setLocalDescription(answer);
+
+          await ch.send({
+            type: "broadcast",
+            event: "signal",
+            payload: { type: "answer", sdp: answer } satisfies CamSignalMsg,
+          });
+        } else if (msg.type === "ice") {
+          await camPcRef.current.addIceCandidate(msg.candidate);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    });
+
+    ch.subscribe((st: string) => {
+      if (st === "SUBSCRIBED") {
+        ch.send({
+          type: "broadcast",
+          event: "signal",
+          payload: { type: "hello", at: Date.now() } satisfies CamSignalMsg,
+        });
+      }
+    });
+  }
+
   async function connect(rawOverride?: string) {
     const raw = String(rawOverride ?? code).replace(/\D/g, "");
     if (raw.length !== 6) return alert("Vul 6 cijfers in.");
 
     await cleanup();
     setStatus("connecting");
+
+    // Setup BOTH receivers:
+    // - screen: signal:${raw}
+    // - camera: signalcam:${raw}
+    await setupCameraReceiver(raw);
 
     const ch = supabase.channel(`signal:${raw}`);
     channelRef.current = ch;
@@ -218,12 +343,9 @@ export default function KindVerbinden() {
       if (!v) return;
 
       setNeedsTapToPlay(false);
-
       v.srcObject = stream;
       v.muted = true;
       v.playsInline = true;
-
-      // ✅ extra hints
       v.disablePictureInPicture = true;
 
       const tryPlay = async () => {
@@ -272,6 +394,8 @@ export default function KindVerbinden() {
           await pcRef.current.addIceCandidate(msg.candidate);
         } else if (msg.type === "quality") {
           setRemoteQuality(msg.quality);
+        } else if (msg.type === "active_source") {
+          setActiveSource(msg.source);
         }
       } catch (e) {
         console.error(e);
@@ -311,13 +435,12 @@ export default function KindVerbinden() {
 
   async function fullscreen() {
     try {
-      const el = videoRef.current;
+      const el = activeSource === "camera" ? camVideoRef.current : videoRef.current;
       if (!el) return;
       await (el as any).requestFullscreen?.();
     } catch {}
   }
 
-  // pointer -> normalized (op basis van viewport + pan + zoom)
   function pointerToNormalized(e: React.PointerEvent) {
     const vp = viewportRef.current;
     if (!vp) return { nx: 0, ny: 0 };
@@ -442,7 +565,6 @@ export default function KindVerbinden() {
     };
   }, [draft, pan.x, pan.y, zoom]);
 
-  // Pan handlers
   function onViewportPointerDown(e: React.PointerEvent) {
     if (annotate) return;
     if (zoom <= 1) return;
@@ -459,7 +581,6 @@ export default function KindVerbinden() {
     panDragRef.current.dragging = false;
   }
 
-  // Draw handlers
   function onCanvasPointerDown(e: React.PointerEvent) {
     if (!annotate || !connected) return;
     (e.currentTarget as any).setPointerCapture?.(e.pointerId);
@@ -510,7 +631,7 @@ export default function KindVerbinden() {
   }
 
   function captureSnapshotJpeg(): string | null {
-    const v = videoRef.current;
+    const v = activeSource === "camera" ? camVideoRef.current : videoRef.current;
     if (!v) return null;
     const vw = v.videoWidth || 0;
     const vh = v.videoHeight || 0;
@@ -558,251 +679,191 @@ export default function KindVerbinden() {
   const raw = code.replace(/\D/g, "");
   const canConnect = raw.length === 6;
 
-  async function tapToPlay() {
-    const v = videoRef.current;
-    if (!v) return;
-    try {
-      v.muted = true;
-      await v.play();
-      setNeedsTapToPlay(false);
-    } catch {
-      setNeedsTapToPlay(true);
-    }
-  }
-
+  // ========== UI ==========
   return (
     <FullscreenShell
-      sidebarTitle="Kind"
-      sidebarSubtitle="Controls"
       sidebar={
-        <div className="flex flex-col gap-3">
-          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
-            <div className="text-sm text-white/60">Status</div>
-            <div className="text-sm text-white">
-              <span className="text-white/70">verbinding:</span> <span className="font-mono">{status}</span>
-              {remoteQuality ? (
-                <>
-                  <span className="text-white/50"> • </span>
-                  <span className="text-white/70">kwaliteit ouder:</span>{" "}
-                  <span className="font-mono">{remoteQuality}</span>
-                </>
-              ) : null}
-            </div>
+        <div className="p-4 space-y-3">
+          <div className="text-sm font-semibold">Kind – verbinden</div>
+
+          {useKoppelcode ? (
+            <>
+              <div className="text-xs text-slate-600">
+                Vul de 6-cijferige code in die je van je ouder hebt gekregen.
+              </div>
+
+              <Input value={formatCode(code)} onChange={(e) => setCode(e.target.value)} placeholder="123 456" />
+
+              <div className="flex gap-2">
+                <Button variant="primary" onClick={() => connect()} disabled={!canConnect || status === "connecting"} className="flex-1">
+                  Verbinden
+                </Button>
+                <Button onClick={disconnect} disabled={status === "idle"} className="w-28">
+                  Stop
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-xs text-slate-600">Actieve sessies die al aan jou zijn toegewezen:</div>
+              {activeError ? <div className="text-xs text-red-600">{activeError}</div> : null}
+              <div className="space-y-2">
+                {activeSessions.map((s) => (
+                  <Button key={s.id} onClick={() => connect(s.code)} className="w-full">
+                    Meekijken: {s.code}
+                  </Button>
+                ))}
+                {activeSessions.length === 0 ? <div className="text-xs text-slate-500">Geen actieve sessies.</div> : null}
+              </div>
+
+              <div className="pt-2">
+                <Button onClick={refreshActiveSessions} className="w-full">
+                  Vernieuwen
+                </Button>
+              </div>
+            </>
+          )}
+
+          <div className="pt-2 text-xs text-slate-600">
+            Status: <span className="font-semibold">{status}</span>
           </div>
 
-          {!useKoppelcode ? (
-            <div className="rounded-xl bg-white/5 border border-white/10 p-3">
-              <div className="text-sm text-white/60 mb-2">Actieve sessies</div>
-              {activeError ? <div className="text-sm text-red-200 mb-2">{activeError}</div> : null}
+          <div className="text-xs text-slate-600">
+            Ouder toont:{" "}
+            <span className="font-semibold">
+              {activeSource === "camera" ? "Telefoon" : activeSource === "screen" ? "Scherm" : "Niets"}
+            </span>
+          </div>
 
-              {activeSessions.length === 0 ? (
-                <div className="text-sm text-white/70">Geen open sessies gevonden.</div>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {activeSessions.map((s) => (
-                    <div
-                      key={s.id}
-                      className="flex items-center justify-between gap-2 rounded-xl bg-white/5 border border-white/10 p-2"
-                    >
-                      <div className="text-sm text-white">
-                        <span className="text-white/70">code:</span>{" "}
-                        <span className="font-mono">
-                          {String(s.code).slice(0, 3)} {String(s.code).slice(3)}
-                        </span>
-                      </div>
-
-                      {/* ✅ No-code UX: kind hoeft niets te typen; we gebruiken de code intern */}
-                      <Button
-                        variant="primary"
-                        onClick={() => {
-                          setCode(formatCode(String(s.code)));
-                          void connect(String(s.code));
-                        }}
-                      >
-                        Open
-                      </Button>
-                    </div>
-                  ))}
-                  <Button onClick={refreshActiveSessions}>Ververs</Button>
-                </div>
-              )}
+          {remoteQuality ? (
+            <div className="text-xs text-slate-600">
+              Kwaliteit: <span className="font-semibold">{remoteQuality}</span>
             </div>
           ) : null}
 
-          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
-            <div className="text-sm text-white/60 mb-2">Koppelcode</div>
-            <div className="flex flex-col gap-2">
-              <Input
-                className="bg-white text-slate-900 placeholder:text-slate-400"
-                value={code}
-                onChange={(e) => setCode(formatCode(e.target.value))}
-                placeholder="123 456"
-                inputMode="numeric"
-                disabled={!useKoppelcode}
-              />
-
-              {!connected ? (
-                <Button
-                  variant="primary"
-                  onClick={() => void connect()}
-                  disabled={!canConnect || status === "connecting" || !useKoppelcode}
-                  title={!useKoppelcode ? "Code is uitgeschakeld; gebruik Actieve sessies." : undefined}
-                >
-                  {status === "connecting" ? "Verbinden…" : "Verbind"}
-                </Button>
-              ) : (
-                <Button onClick={disconnect}>Stop</Button>
-              )}
-
-              {!useKoppelcode ? (
-                <div className="text-xs text-white/60">Code is uitgeschakeld. Gebruik “Actieve sessies”.</div>
-              ) : null}
-            </div>
+          <div className="pt-2 flex gap-2 flex-wrap">
+            <Button onClick={zoomOut} disabled={zoom <= 1}>
+              −
+            </Button>
+            <Button onClick={zoomIn} disabled={zoom >= 3}>
+              +
+            </Button>
+            <Button onClick={resetView} disabled={zoom === 1 && pan.x === 0 && pan.y === 0}>
+              Reset
+            </Button>
+            <Button onClick={fullscreen} className="ml-auto">
+              Fullscreen
+            </Button>
           </div>
 
-          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
-            <div className="text-sm text-white/60 mb-2">Beeld</div>
-
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={zoomOut} disabled={zoom <= 1} title="Zoom uit">
-                −
-              </Button>
-              <Button onClick={zoomIn} disabled={zoom >= 3} title="Zoom in">
-                +
-              </Button>
-              <Button onClick={resetView}>Reset</Button>
-              <Button onClick={fullscreen}>Fullscreen</Button>
-            </div>
-
-            <div className="mt-2">
-              <input
-                type="range"
-                min={1}
-                max={3}
-                step={0.25}
-                value={zoom}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  setZoom(v);
-                  if (v === 1) setPan({ x: 0, y: 0 });
-                }}
-                className="w-full"
-              />
-              <div className="text-xs text-white/60 mt-1">
-                Zoom: <span className="font-mono text-white/80">{Math.round(zoom * 100)}%</span>
-              </div>
-              <div className="text-xs text-white/60">
-                Pan:{" "}
-                <span className="font-mono text-white/80">
-                  {Math.round(pan.x)},{Math.round(pan.y)}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
-            <div className="text-sm text-white/60 mb-2">Aantekeningen</div>
-
-            <label className="flex items-center gap-2 text-sm text-white/80">
-              <input
-                type="checkbox"
-                checked={annotate}
-                onChange={(e) => setAnnotate(e.target.checked)}
-                disabled={!connected}
-              />
+          <div className="pt-2 rounded-xl border p-3">
+            <div className="text-xs font-semibold">Aanwijzen / tekenen</div>
+            <label className="mt-2 flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={annotate} onChange={(e) => setAnnotate(e.target.checked)} />
               Aan
             </label>
 
-            <div className="mt-2 flex flex-col gap-2">
-              <select
-                value={tool}
-                onChange={(e) => setTool(e.target.value as DrawTool)}
-                className="h-10 rounded-xl border px-3 bg-white text-slate-900"
-                disabled={!annotate}
-              >
-                <option value="circle">Cirkel</option>
-                <option value="rect">Kader</option>
-                <option value="arrow">Pijl</option>
-              </select>
+            <div className="mt-2 flex gap-2">
+              <Button onClick={() => setTool("circle")} variant={tool === "circle" ? "primary" : "secondary"}>
+                Cirkel
+              </Button>
+              <Button onClick={() => setTool("rect")} variant={tool === "rect" ? "primary" : "secondary"}>
+                Kader
+              </Button>
+              <Button onClick={() => setTool("arrow")} variant={tool === "arrow" ? "primary" : "secondary"}>
+                Pijl
+              </Button>
+            </div>
 
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  onClick={() => setDraft((d) => d.slice(0, -1))}
-                  disabled={!annotate || draft.length === 0}
-                  title="Undo"
-                >
-                  Undo
-                </Button>
-                <Button onClick={() => setDraft([])} disabled={!annotate || draft.length === 0}>
-                  Wissen
-                </Button>
-                <Button variant="primary" onClick={shareToParent} disabled={!annotate || draft.length === 0}>
-                  Delen
-                </Button>
-              </div>
+            <div className="mt-3 flex gap-2">
+              <Button onClick={shareToParent} disabled={!connected || draft.length === 0} className="flex-1" variant="primary">
+                Delen
+              </Button>
+              <Button onClick={() => setDraft([])} disabled={draft.length === 0} className="w-28">
+                Reset
+              </Button>
+            </div>
+
+            <div className="mt-2 text-[11px] text-slate-500">
+              Tip: zoom in om precies te tekenen. Pan werkt alleen als annotatie uit staat.
             </div>
           </div>
         </div>
       }
     >
-      <ViewerStage>
-        <div
-          ref={viewportRef}
-          className="absolute inset-0"
-          style={{
-            touchAction: "none",
-            cursor: annotate ? "crosshair" : zoom > 1 ? (panDragRef.current.dragging ? "grabbing" : "grab") : "default",
-          }}
-          onPointerDown={onViewportPointerDown}
-          onPointerMove={onViewportPointerMove}
-          onPointerUp={onViewportPointerUp}
-          onPointerCancel={onViewportPointerUp}
-          onPointerLeave={onViewportPointerUp}
-        >
-          <div
-            className="absolute inset-0"
-            style={{
-              width: `${zoom * 100}%`,
-              height: `${zoom * 100}%`,
-              transform: `translate(${pan.x}px, ${pan.y}px)`,
-              transformOrigin: "top left",
-            }}
-          >
-            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
-          </div>
+      <div className="h-screen w-screen bg-black">
+        <ViewerStage>
+          <div className="h-full w-full">
+            {/* Groot meekijk vlak (zelfde plek voor screen of camera) */}
+            <div
+              ref={viewportRef}
+              className="relative h-full w-full overflow-hidden bg-black"
+              onPointerDown={onViewportPointerDown}
+              onPointerMove={onViewportPointerMove}
+              onPointerUp={onViewportPointerUp}
+              onPointerCancel={onViewportPointerUp}
+            >
+              {/* Screen video */}
+              <video
+                ref={videoRef}
+                className={`absolute inset-0 h-full w-full ${activeSource === "screen" ? "block" : "hidden"}`}
+                style={{
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                  transformOrigin: "top left",
+                }}
+              />
 
-          <canvas
-            ref={canvasRef}
-            className="absolute inset-0"
-            style={{ pointerEvents: annotate ? "auto" : "none" }}
-            onPointerDown={onCanvasPointerDown}
-            onPointerMove={onCanvasPointerMove}
-            onPointerUp={onCanvasPointerUp}
-            onPointerCancel={onCanvasPointerUp}
-            onPointerLeave={onCanvasPointerUp}
-          />
+              {/* Camera video */}
+              <video
+                ref={camVideoRef}
+                className={`absolute inset-0 h-full w-full ${activeSource === "camera" ? "block" : "hidden"}`}
+                style={{
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                  transformOrigin: "top left",
+                  objectFit: "cover",
+                }}
+              />
 
-          {needsTapToPlay ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="rounded-2xl bg-black/70 border border-white/15 text-white px-4 py-3 text-sm">
-                <div className="font-semibold mb-1">Klik om beeld te starten</div>
-                <div className="text-white/70 mb-3">
-                  Je browser blokkeert autoplay. Klik hieronder om de stream te starten.
+              {/* Placeholder */}
+              {activeSource === "none" ? (
+                <div className="absolute inset-0 flex items-center justify-center text-white/70 text-sm">
+                  Geen actieve bron. Vraag je ouder om scherm of telefoon te tonen.
                 </div>
-                <Button variant="primary" onClick={tapToPlay}>
-                  Start beeld
-                </Button>
-              </div>
-            </div>
-          ) : null}
+              ) : null}
 
-          {isFullscreen ? (
-            <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2">
-              Fullscreen — druk <b>ESC</b> om terug te gaan
+              {/* Tap to play overlay (iOS) */}
+              {needsTapToPlay && activeSource === "screen" ? (
+                <button
+                  onClick={() => videoRef.current?.play?.().catch(() => {})}
+                  className="absolute inset-0 flex items-center justify-center bg-black/40 text-white text-sm"
+                >
+                  Tik om video te starten
+                </button>
+              ) : null}
+
+              {needsTapToPlayCam && activeSource === "camera" ? (
+                <button
+                  onClick={() => camVideoRef.current?.play?.().catch(() => {})}
+                  className="absolute inset-0 flex items-center justify-center bg-black/40 text-white text-sm"
+                >
+                  Tik om camera te starten
+                </button>
+              ) : null}
+
+              {/* Annotation canvas */}
+              <canvas
+                ref={canvasRef}
+                className="absolute inset-0"
+                onPointerDown={onCanvasPointerDown}
+                onPointerMove={onCanvasPointerMove}
+                onPointerUp={onCanvasPointerUp}
+                onPointerCancel={onCanvasPointerUp}
+                style={{ touchAction: "none" }}
+              />
             </div>
-          ) : null}
-        </div>
-      </ViewerStage>
+          </div>
+        </ViewerStage>
+      </div>
     </FullscreenShell>
   );
 }

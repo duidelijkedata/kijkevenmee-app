@@ -8,6 +8,7 @@ import FullscreenShell from "@/components/meekijk/FullscreenShell";
 import ViewerStage from "@/components/meekijk/ViewerStage";
 
 type Quality = "low" | "medium" | "high";
+type ActiveSource = "screen" | "camera" | "none";
 
 type DraftShape =
   | { kind: "circle"; x: number; y: number; r: number }
@@ -27,7 +28,8 @@ type SignalMsg =
   | { type: "answer"; sdp: any }
   | { type: "ice"; candidate: any }
   | { type: "quality"; quality: Quality }
-  | { type: "draw_packet"; packet: DrawPacket };
+  | { type: "draw_packet"; packet: DrawPacket }
+  | { type: "active_source"; source: ActiveSource };
 
 type CamSignalMsg =
   | { type: "hello"; at: number }
@@ -43,9 +45,6 @@ function qualityLabel(q: Quality) {
   return "Hoog (meest scherp)";
 }
 
-/**
- * ✅ hogere bitrate + maintain-resolution
- */
 function qualityParams(q: Quality) {
   if (q === "low") return { maxBitrate: 2_500_000, idealFps: 15, maxFps: 20 };
   if (q === "medium") return { maxBitrate: 8_000_000, idealFps: 30, maxFps: 30 };
@@ -60,36 +59,27 @@ export default function ShareClient({ code }: { code: string }) {
   const [auto, setAuto] = useState(true);
   const [debugLine, setDebugLine] = useState("");
 
-  // ✅ default UIT: voorkomt scherm-in-scherm loop
   const [showPreview, setShowPreview] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-
   const pcRef = useRef<RTCPeerConnection | null>(null);
 
-  // ✅ 1 kanaal voor alles (signaling + packets)
   const channelRef = useRef<any>(null);
-
-  // ✅ Als kind later joint: offer opnieuw kunnen sturen
   const lastOfferRef = useRef<any>(null);
 
   const statsTimerRef = useRef<any>(null);
   const lastBytesSentRef = useRef<number | null>(null);
   const lastStatsAtRef = useRef<number | null>(null);
 
-  // packets van kind
   const [packets, setPackets] = useState<PacketState[]>([]);
   const [activePacketId, setActivePacketId] = useState<string | null>(null);
 
-  // Snapshot viewer refs
   const snapshotWrapRef = useRef<HTMLDivElement | null>(null);
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const origin =
-    typeof window !== "undefined" && window.location?.origin
-      ? window.location.origin
-      : "https://kijkevenmee-app.vercel.app";
+    typeof window !== "undefined" && window.location?.origin ? window.location.origin : "https://kijkevenmee-app.vercel.app";
 
   // ====== Telefoon camera modal state ======
   const [camOpen, setCamOpen] = useState(false);
@@ -103,6 +93,20 @@ export default function ShareClient({ code }: { code: string }) {
   const camChRef = useRef<any>(null);
   const [camStatus, setCamStatus] = useState<"idle" | "waiting" | "connecting" | "connected" | "error">("idle");
   const [camStatusText, setCamStatusText] = useState<string>("");
+
+  // ====== Active source (wat het kind moet zien) ======
+  const [activeSource, setActiveSourceState] = useState<ActiveSource>("screen");
+
+  async function broadcastActiveSource(source: ActiveSource) {
+    setActiveSourceState(source);
+    try {
+      await channelRef.current?.send({
+        type: "broadcast",
+        event: "signal",
+        payload: { type: "active_source", source } satisfies SignalMsg,
+      });
+    } catch {}
+  }
 
   function qrUrl(data: string) {
     const size = "240x240";
@@ -128,8 +132,7 @@ export default function ShareClient({ code }: { code: string }) {
       setCamLink(url);
       setCamLoading(false);
 
-      // zodra we een link hebben: ga alvast luisteren naar signalcam
-      // (telefoon kan later pas starten)
+      // alvast luisteren
       await startCameraReceiver();
     } catch (e) {
       setCamError("Netwerkfout bij aanmaken telefoon-link.");
@@ -163,10 +166,16 @@ export default function ShareClient({ code }: { code: string }) {
 
     setCamStatus("idle");
     setCamStatusText("");
+
+    // terug naar scherm als screenshare actief is, anders none
+    if (status === "sharing" || status === "connected") {
+      await broadcastActiveSource("screen");
+    } else {
+      await broadcastActiveSource("none");
+    }
   }
 
   async function startCameraReceiver() {
-    // reset
     await stopCameraReceiver();
     setCamStatus("waiting");
     setCamStatusText("Wachten op telefoon… (start camera op je telefoon)");
@@ -196,6 +205,9 @@ export default function ShareClient({ code }: { code: string }) {
       }
       setCamStatus("connected");
       setCamStatusText("Verbonden");
+
+      // ✅ zodra telefoon live is: camera wordt actieve bron (kind ziet telefoon)
+      void broadcastActiveSource("camera");
     };
 
     const ch = supabase.channel(`signalcam:${code}`);
@@ -206,7 +218,6 @@ export default function ShareClient({ code }: { code: string }) {
 
       try {
         if (msg.type === "hello") {
-          // Telefoon meldt "ik ben er", wij blijven wachten op offer
           if (camStatus !== "connected") {
             setCamStatus("waiting");
             setCamStatusText("Telefoon klaar. Wachten op videostart…");
@@ -247,7 +258,6 @@ export default function ShareClient({ code }: { code: string }) {
 
     ch.subscribe();
 
-    // help: als telefoon later joint, kan hij ons zien
     try {
       await ch.send({
         type: "broadcast",
@@ -257,15 +267,12 @@ export default function ShareClient({ code }: { code: string }) {
     } catch {}
   }
 
-  // Als modal open gaat: begin meteen te luisteren (ook zonder link)
   useEffect(() => {
     if (!camOpen) return;
-    // luister alvast; telefoon kan later starten
     startCameraReceiver().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camOpen]);
 
-  // Cleanup bij unmount
   useEffect(() => {
     return () => {
       stopCameraReceiver().catch(() => {});
@@ -273,7 +280,7 @@ export default function ShareClient({ code }: { code: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Maak channel 1x en blijf daarop luisteren (ook wanneer idle)
+  // ✅ Main signaling channel
   useEffect(() => {
     const ch = supabase.channel(`signal:${code}`);
     channelRef.current = ch;
@@ -350,7 +357,6 @@ export default function ShareClient({ code }: { code: string }) {
     params.encodings[0].maxFramerate = maxFps;
     // @ts-ignore
     params.encodings[0].scaleResolutionDownBy = 1;
-
     // @ts-ignore
     params.degradationPreference = "maintain-resolution";
 
@@ -430,6 +436,10 @@ export default function ShareClient({ code }: { code: string }) {
     }
 
     setStatus("idle");
+
+    // als camera connected is, laat die actief; anders none
+    if (camStatus === "connected") await broadcastActiveSource("camera");
+    else await broadcastActiveSource("none");
   }
 
   async function startShare() {
@@ -505,6 +515,9 @@ export default function ShareClient({ code }: { code: string }) {
 
       setStatus("sharing");
       startStatsLoop();
+
+      // ✅ Screen wordt de actieve bron (kind ziet scherm)
+      await broadcastActiveSource("screen");
     } catch (e) {
       console.error(e);
       setStatus("error");
@@ -647,17 +660,16 @@ export default function ShareClient({ code }: { code: string }) {
                 )}
               </div>
 
-              {/* RIGHT: Live camera preview */}
+              {/* RIGHT: Live camera preview (portrait) */}
               <div className="rounded-xl border bg-slate-50 p-3">
-             <div className="flex items-center justify-between">
-  <div className="text-sm font-medium">Live camera</div>
-  <div className="flex gap-2">
-    <Button onClick={() => stopCameraReceiver()} className="h-9">
-      Stop
-    </Button>
-  </div>
-</div>
-
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium">Live camera</div>
+                  <div className="flex gap-2">
+                    <Button onClick={() => stopCameraReceiver()} className="h-9">
+                      Stop
+                    </Button>
+                  </div>
+                </div>
 
                 <div className="mt-2 text-xs text-slate-600">
                   Status:{" "}
@@ -676,9 +688,25 @@ export default function ShareClient({ code }: { code: string }) {
                 </div>
 
                 <div className="mt-3 mx-auto w-full max-w-[320px] rounded-xl overflow-hidden bg-black aspect-[9/16]">
-  <video ref={camVideoRef} className="w-full h-full object-cover" />
-</div>
+                  <video ref={camVideoRef} className="w-full h-full object-cover" />
+                </div>
 
+                <div className="mt-3 rounded-xl border bg-white p-3">
+                  <div className="text-xs text-slate-600">
+                    Kind ziet nu: <span className="font-semibold">{activeSource === "camera" ? "Telefoon" : activeSource === "screen" ? "Scherm" : "Niets"}</span>
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <Button onClick={() => broadcastActiveSource("camera")} disabled={camStatus !== "connected"} className="flex-1">
+                      Toon telefoon
+                    </Button>
+                    <Button onClick={() => broadcastActiveSource("screen")} disabled={status === "idle"} className="flex-1">
+                      Toon scherm
+                    </Button>
+                  </div>
+                  <div className="mt-2 text-[11px] text-slate-500">
+                    Tip: “Toon telefoon” werkt pas als de telefoon verbonden is. “Toon scherm” werkt pas als je scherm deelt.
+                  </div>
+                </div>
 
                 <div className="mt-2 text-xs text-slate-500">
                   Zie je zwart beeld? Start de camera op je telefoon (en geef cameratoestemming).
@@ -780,9 +808,7 @@ export default function ShareClient({ code }: { code: string }) {
                           key={p.id}
                           onClick={() => setActivePacketId(p.id)}
                           className={`text-left rounded-xl border px-3 py-2 ${
-                            p.id === activePacketId
-                              ? "bg-white text-black"
-                              : "bg-transparent text-white/90 border-white/20"
+                            p.id === activePacketId ? "bg-white text-black" : "bg-transparent text-white/90 border-white/20"
                           }`}
                         >
                           <div className="text-xs opacity-80">
