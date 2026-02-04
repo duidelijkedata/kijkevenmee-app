@@ -10,10 +10,37 @@ type SignalMsg =
   | { type: "answer"; sdp: any }
   | { type: "ice"; candidate: any };
 
+type ValidateOk = {
+  ok: true;
+  support_code: string;
+  owner_user_id?: string;
+  expires_at?: string;
+};
+
+type ValidateErr = {
+  error?: string;
+};
+
+async function safeJson(res: Response) {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+function prettyTokenError(err: string) {
+  if (err === "missing_token") return "Geen token in de link gevonden.";
+  if (err === "token_not_found") return "Deze link is ongeldig of al gebruikt.";
+  if (err === "token_expired") return "Deze link is verlopen. Maak een nieuwe QR/link op de laptop.";
+  return "Kon token niet valideren.";
+}
+
 export default function OuderCameraPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [status, setStatus] = useState<"idle" | "resolving" | "ready" | "connecting" | "connected" | "error">("idle");
   const [errorText, setErrorText] = useState<string>("");
+
   const [code, setCode] = useState<string>("");
   const [token, setToken] = useState<string>("");
 
@@ -28,25 +55,41 @@ export default function OuderCameraPage() {
     setToken(t);
   }, []);
 
-  // Resolve token -> support code
+  // Resolve token -> support code (publieke validate endpoint)
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      setStatus("error");
+      setErrorText("Geen token in de URL. Scan de QR-code opnieuw.");
+      return;
+    }
 
     (async () => {
       setStatus("resolving");
       setErrorText("");
 
       try {
-        const res = await fetch(`/api/support/camera-token/${encodeURIComponent(token)}`, { method: "GET" });
-        const json = await res.json();
+        const res = await fetch(`/api/support/camera/validate?token=${encodeURIComponent(token)}`, {
+          method: "GET",
+          cache: "no-store",
+        });
+
+        const json = (await safeJson(res)) as (ValidateOk & ValidateErr) | null;
 
         if (!res.ok) {
+          const err = json?.error || "unknown";
           setStatus("error");
-          setErrorText(json?.error || "Kon token niet valideren.");
+          setErrorText(prettyTokenError(err));
           return;
         }
 
-        setCode(json.code);
+        const ok = json as ValidateOk;
+        if (!ok?.support_code) {
+          setStatus("error");
+          setErrorText("Token is geldig, maar sessiecode ontbreekt. Probeer een nieuwe link.");
+          return;
+        }
+
+        setCode(ok.support_code);
         setStatus("ready");
       } catch (e: any) {
         setStatus("error");
@@ -152,7 +195,7 @@ export default function OuderCameraPage() {
 
       pc.addTrack(track, stream);
 
-      // lokale preview (handig voor ouder om te zien wat je filmt)
+      // lokale preview
       if (videoPreviewRef.current) {
         videoPreviewRef.current.srcObject = stream;
         videoPreviewRef.current.muted = true;
@@ -169,7 +212,6 @@ export default function OuderCameraPage() {
         payload: { type: "offer", sdp: offer } satisfies SignalMsg,
       });
 
-      // “hello” kan helpen als kind later subscribed
       await channelRef.current?.send({
         type: "broadcast",
         event: "signal",
@@ -233,13 +275,10 @@ export default function OuderCameraPage() {
             </span>
           </div>
 
-          {/* alleen debug/handig */}
           {code ? <div className="mt-2 text-xs text-slate-500">Sessie: {code}</div> : null}
         </Card>
 
-        <div className="text-xs text-slate-500 text-center">
-          Tip: zet je telefoon in landscape voor een bredere view.
-        </div>
+        <div className="text-xs text-slate-500 text-center">Tip: zet je telefoon in landscape voor een bredere view.</div>
       </div>
     </main>
   );
