@@ -16,7 +16,7 @@ export async function POST(req: Request) {
   const requester_name = typeof body?.requester_name === "string" ? body.requester_name : null;
   const requester_note = typeof body?.requester_note === "string" ? body.requester_note : null;
 
-  // Client mag helper_id meegeven (voor dropdown-selectie). Anders proberen we server-side auto-assign.
+  // Client mag helper_id meegeven (bijv. via dropdown). Anders proberen we server-side auto-assign.
   let helper_id = typeof body?.helper_id === "string" ? body.helper_id.trim() : null;
 
   let auto_assigned = false;
@@ -24,7 +24,6 @@ export async function POST(req: Request) {
 
   try {
     if (!helper_id) {
-      // ✅ Probeer auto-assign op basis van ingelogde ouder + gekoppelde kind(eren) met use_koppelcode=false
       const supabase = await supabaseServer();
       const { data } = await supabase.auth.getUser();
       const user = data.user;
@@ -41,7 +40,6 @@ export async function POST(req: Request) {
             const childId = (r as any).child_id as string | null;
             const helperId = (r as any).helper_id as string | null;
 
-            // pak "de andere kant"
             if (childId === user.id && helperId) related.add(helperId);
             if (helperId === user.id && childId) related.add(childId);
           }
@@ -55,6 +53,7 @@ export async function POST(req: Request) {
               .in("id", ids);
 
             const noCode = (profs ?? []).filter((p: any) => (p.use_koppelcode ?? true) === false);
+
             if (noCode.length === 1) {
               helper_id = String(noCode[0].id);
               auto_assigned = true;
@@ -75,7 +74,6 @@ export async function POST(req: Request) {
       }
     }
   } catch {
-    // geen hard fail; we vallen terug op code-flow
     assign_reason = assign_reason ?? "auto_assign_exception";
   }
 
@@ -88,7 +86,6 @@ export async function POST(req: Request) {
     requester_name,
     requester_note,
   };
-
   if (helper_id) insertPayload.helper_id = helper_id;
 
   const { data: session, error } = await admin
@@ -101,5 +98,23 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 400 });
   }
 
-  return NextResponse.json({ session, auto_assigned, assign_reason });
+  // ✅ NEW: bepaal server-side of deze sessie een code vereist
+  // default = true (veilig)
+  let requires_code = true;
+  if (session?.helper_id) {
+    const { data: prof } = await admin
+      .from("profiles")
+      .select("use_koppelcode")
+      .eq("id", session.helper_id)
+      .maybeSingle<{ use_koppelcode: boolean | null }>();
+
+    requires_code = prof?.use_koppelcode ?? true;
+  }
+
+  return NextResponse.json({
+    session,
+    auto_assigned,
+    assign_reason,
+    requires_code,
+  });
 }

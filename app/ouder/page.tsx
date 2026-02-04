@@ -1,31 +1,126 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Card, Button, Input, Textarea } from "@/components/ui";
+import { supabaseBrowser } from "@/lib/supabase/browser";
+
+type LinkedChild = {
+  id: string;
+  label: string;
+  use_koppelcode: boolean;
+};
+
+type RelatedUser = {
+  id: string;
+  display_name?: string | null;
+  use_koppelcode?: boolean | null;
+};
 
 export default function OuderStart() {
+  const router = useRouter();
+  const supabase = useMemo(() => supabaseBrowser(), []);
+
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
   const [created, setCreated] = useState<{ code: string } | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const [linkedChildren, setLinkedChildren] = useState<LinkedChild[]>([]);
+  const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      const uid = data?.user?.id ?? null;
+      if (!uid) return;
+
+      const { data: rels } = await supabase
+        .from("helper_relationships")
+        .select("child_id, helper_id")
+        .or(`helper_id.eq.${uid},child_id.eq.${uid}`);
+
+      const ids = new Set<string>();
+      for (const r of rels ?? []) {
+        const childId = (r as any).child_id as string | null;
+        const helperId = (r as any).helper_id as string | null;
+
+        if (helperId === uid && childId) ids.add(childId);
+        if (childId === uid && helperId) ids.add(helperId);
+      }
+
+      const wanted = Array.from(ids);
+      if (!wanted.length) return;
+
+      const r = await fetch("/api/related-users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: wanted }),
+      });
+
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return;
+
+      const users: RelatedUser[] = Array.isArray(j?.users) ? (j.users as RelatedUser[]) : [];
+      const byId = new Map<string, RelatedUser>(users.map((u) => [u.id, u]));
+
+      const mapped: LinkedChild[] = wanted
+        .map((id) => {
+          const u = byId.get(id);
+          if (!u) return null;
+
+          const label = String(u.display_name ?? "").trim() || `Kind ${String(id).slice(0, 8)}…`;
+          return {
+            id,
+            label,
+            use_koppelcode: Boolean(u.use_koppelcode ?? true),
+          } satisfies LinkedChild;
+        })
+        .filter(Boolean) as LinkedChild[];
+
+      setLinkedChildren(mapped);
+      if (mapped.length) setSelectedChildId(mapped[0].id);
+    })();
+  }, [supabase]);
+
+  const selectedChild =
+    selectedChildId ? linkedChildren.find((c) => c.id === selectedChildId) ?? null : null;
+
   async function start() {
     setLoading(true);
+    setCreated(null);
 
-    // LET OP: dit endpoint moet bestaan in jouw repo (zoals je nu al gebruikt).
+    const shouldAssignToChild = Boolean(selectedChild && !selectedChild.use_koppelcode);
+
     const res = await fetch("/api/sessions/create-parent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ requester_name: name || null, requester_note: note || null }),
+      body: JSON.stringify({
+        requester_name: name || null,
+        requester_note: note || null,
+        helper_id: shouldAssignToChild ? selectedChild!.id : null,
+      }),
     });
 
-    const json = await res.json();
+    const json = await res.json().catch(() => ({}));
     setLoading(false);
 
-    if (json.error) return alert(json.error);
+    if (!res.ok || json?.error) return alert(json?.error ?? "Onbekende fout");
 
-    const code = json.session.code as string; // verwacht: "123456"
+    const session = json?.session as { code?: string; helper_id?: string | null } | undefined;
+    const code = String(session?.code || "").trim();
+    if (!code) return alert("Sessie is gemaakt maar code ontbreekt.");
+
+    const requiresCode = Boolean(json?.requires_code ?? true);
+
+    // ✅ Definitief: server beslist. Als code niet vereist is → geen code tonen, direct share.
+    if (!requiresCode) {
+      router.push(`/ouder/share/${code}`);
+      return;
+    }
+
+    // Anders: code tonen zoals voorheen
     setCreated({ code });
   }
 
@@ -72,12 +167,38 @@ export default function OuderStart() {
       {!created ? (
         <Card>
           <div className="space-y-3">
+            {linkedChildren.length ? (
+              <div>
+                <label className="block text-sm font-medium text-slate-700">Kies je kind</label>
+                <div className="mt-1">
+                  <select
+                    className="h-12 w-full rounded-xl border px-3 bg-white"
+                    value={selectedChildId ?? ""}
+                    onChange={(e) => setSelectedChildId(e.target.value)}
+                  >
+                    {linkedChildren.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label}
+                        {c.use_koppelcode ? " (met code)" : " (zonder code)"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="mt-1 text-sm text-slate-500">
+                  {selectedChild?.use_koppelcode
+                    ? "Deze hulpsessie start met een 6-cijferige code."
+                    : "Deze hulpsessie start zonder code: je kind ziet de sessie direct bij Verbinden."}
+                </p>
+              </div>
+            ) : null}
+
             <div>
               <label className="block text-sm font-medium text-slate-700">Naam (optioneel)</label>
               <div className="mt-1">
                 <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Bijv. Jan" />
               </div>
             </div>
+
             <div>
               <label className="block text-sm font-medium text-slate-700">Korte vraag (optioneel)</label>
               <div className="mt-1">
@@ -88,6 +209,7 @@ export default function OuderStart() {
                 />
               </div>
             </div>
+
             <Button variant="primary" className="w-full" onClick={start} disabled={loading}>
               {loading ? "Bezig..." : "Start hulp"}
             </Button>
@@ -97,7 +219,9 @@ export default function OuderStart() {
         <>
           <Card>
             <h2 className="text-xl font-semibold">Geef deze code aan je kind</h2>
-            <p className="mt-1 text-slate-600">Kind gaat naar <span className="font-mono">/kind/verbinden</span> en vult de code in.</p>
+            <p className="mt-1 text-slate-600">
+              Kind gaat naar <span className="font-mono">/kind/verbinden</span> en vult de code in.
+            </p>
 
             <div className="mt-4 rounded-2xl bg-slate-50 border p-4 text-center">
               <div className="text-4xl font-mono tracking-widest">
@@ -115,7 +239,9 @@ export default function OuderStart() {
                 Stuur via WhatsApp
               </a>
               <Button
-                onClick={() => navigator.clipboard.writeText(`Code: ${created.code}\nKind: ${kidUrl}\nOuder: ${shareUrl}`)}
+                onClick={() =>
+                  navigator.clipboard.writeText(`Code: ${created.code}\nKind: ${kidUrl}\nOuder: ${shareUrl}`)
+                }
                 className="w-full"
               >
                 Kopieer info
@@ -125,12 +251,12 @@ export default function OuderStart() {
 
           <Card>
             <h2 className="text-xl font-semibold">Scherm delen</h2>
-            <p className="mt-1 text-slate-600">
-              Klik hieronder om je scherm te delen. Je kind kan alleen kijken.
-            </p>
+            <p className="mt-1 text-slate-600">Klik hieronder om je scherm te delen. Je kind kan alleen kijken.</p>
             <div className="mt-4">
               <Link href={`/ouder/share/${created.code}`} className="block">
-                <Button variant="primary" className="w-full">Ga naar scherm delen</Button>
+                <Button variant="primary" className="w-full">
+                  Ga naar scherm delen
+                </Button>
               </Link>
             </div>
           </Card>
