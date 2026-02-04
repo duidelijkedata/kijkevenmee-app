@@ -16,7 +16,7 @@ export async function POST(req: Request) {
   const requester_name = typeof body?.requester_name === "string" ? body.requester_name : null;
   const requester_note = typeof body?.requester_note === "string" ? body.requester_note : null;
 
-  // Client mag helper_id meegeven (bijv. via dropdown). Anders proberen we server-side auto-assign.
+  // Client mag helper_id meegeven (bijv. dropdown). Anders proberen we server-side auto-assign.
   let helper_id = typeof body?.helper_id === "string" ? body.helper_id.trim() : null;
 
   let auto_assigned = false;
@@ -98,8 +98,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 400 });
   }
 
-  // ✅ NEW: bepaal server-side of deze sessie een code vereist
-  // default = true (veilig)
+  // ✅ NEW: als deze sessie aan een kind is toegewezen, sluit dan oude open sessies voor datzelfde kind
+  if (session?.helper_id) {
+    await admin
+      .from("sessions")
+      .update({ status: "closed" })
+      .eq("helper_id", session.helper_id)
+      .eq("status", "open")
+      .neq("id", session.id);
+  }
+
+  // ✅ Server bepaalt of een code vereist is (default true = veilig)
   let requires_code = true;
   if (session?.helper_id) {
     const { data: prof } = await admin
@@ -118,3 +127,4 @@ export async function POST(req: Request) {
     requires_code,
   });
 }
+

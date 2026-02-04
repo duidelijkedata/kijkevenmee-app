@@ -12,7 +12,6 @@ export async function GET() {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  // ✅ belangrijk voor scenario "geen code": Kind moet weten of use_koppelcode aan/uit staat
   const { data: prof } = await supabase
     .from("profiles")
     .select("use_koppelcode")
@@ -27,7 +26,7 @@ export async function GET() {
     .eq("helper_id", user.id)
     .eq("status", "open")
     .order("created_at", { ascending: false })
-    .limit(5);
+    .limit(1); // ✅ alleen de laatste/actuele
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 400 });
