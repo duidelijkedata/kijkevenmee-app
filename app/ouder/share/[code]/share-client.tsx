@@ -31,12 +31,6 @@ type SignalMsg =
   | { type: "draw_packet"; packet: DrawPacket }
   | { type: "active_source"; source: ActiveSource };
 
-type CamSignalMsg =
-  | { type: "hello"; at: number }
-  | { type: "offer"; sdp: any }
-  | { type: "answer"; sdp: any }
-  | { type: "ice"; candidate: any };
-
 type PacketState = DrawPacket & { seen: boolean };
 
 function qualityLabel(q: Quality) {
@@ -81,20 +75,11 @@ export default function ShareClient({ code }: { code: string }) {
   const origin =
     typeof window !== "undefined" && window.location?.origin ? window.location.origin : "https://kijkevenmee-app.vercel.app";
 
-  // ====== Telefoon camera modal state ======
+  // ====== Telefoon camera modal state (alleen QR/link + source switch) ======
   const [camOpen, setCamOpen] = useState(false);
   const [camLoading, setCamLoading] = useState(false);
   const [camError, setCamError] = useState<string>("");
   const [camLink, setCamLink] = useState<string>("");
-
-  // ====== Telefoon camera receiver state ======
-  const camVideoRef = useRef<HTMLVideoElement | null>(null);
-  const camPcRef = useRef<RTCPeerConnection | null>(null);
-  const camChRef = useRef<any>(null);
-  const [camStatus, setCamStatus] = useState<"idle" | "waiting" | "connecting" | "connected" | "error">("idle");
-  const [camStatusText, setCamStatusText] = useState<string>("");
-
-  // ====== Active source (wat het kind moet zien) ======
   const [activeSource, setActiveSourceState] = useState<ActiveSource>("screen");
 
   async function broadcastActiveSource(source: ActiveSource) {
@@ -131,9 +116,6 @@ export default function ShareClient({ code }: { code: string }) {
       const url = `${origin}/ouder/camera?token=${encodeURIComponent(json.token)}`;
       setCamLink(url);
       setCamLoading(false);
-
-      // alvast luisteren
-      await startCameraReceiver();
     } catch (e) {
       setCamError("Netwerkfout bij aanmaken telefoon-link.");
       setCamLoading(false);
@@ -145,140 +127,6 @@ export default function ShareClient({ code }: { code: string }) {
       await navigator.clipboard.writeText(text);
     } catch {}
   }
-
-  // ====== Camera receiver helpers ======
-  async function stopCameraReceiver() {
-    try {
-      camPcRef.current?.close();
-    } catch {}
-    camPcRef.current = null;
-
-    if (camVideoRef.current) {
-      try {
-        (camVideoRef.current as any).srcObject = null;
-      } catch {}
-    }
-
-    try {
-      if (camChRef.current) supabase.removeChannel(camChRef.current);
-    } catch {}
-    camChRef.current = null;
-
-    setCamStatus("idle");
-    setCamStatusText("");
-
-    // terug naar scherm als screenshare actief is, anders none
-    if (status === "sharing" || status === "connected") {
-      await broadcastActiveSource("screen");
-    } else {
-      await broadcastActiveSource("none");
-    }
-  }
-
-  async function startCameraReceiver() {
-    await stopCameraReceiver();
-    setCamStatus("waiting");
-    setCamStatusText("Wachten op telefoon… (start camera op je telefoon)");
-
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    });
-    camPcRef.current = pc;
-
-    pc.onicecandidate = (e) => {
-      if (e.candidate && camChRef.current) {
-        camChRef.current.send({
-          type: "broadcast",
-          event: "signal",
-          payload: { type: "ice", candidate: e.candidate } satisfies CamSignalMsg,
-        });
-      }
-    };
-
-    pc.ontrack = (ev) => {
-      const stream = ev.streams?.[0];
-      if (stream && camVideoRef.current) {
-        camVideoRef.current.srcObject = stream;
-        camVideoRef.current.playsInline = true;
-        camVideoRef.current.muted = true;
-        camVideoRef.current.play?.().catch(() => {});
-      }
-      setCamStatus("connected");
-      setCamStatusText("Verbonden");
-
-      // ✅ zodra telefoon live is: camera wordt actieve bron (kind ziet telefoon)
-      void broadcastActiveSource("camera");
-    };
-
-    const ch = supabase.channel(`signalcam:${code}`);
-    camChRef.current = ch;
-
-    ch.on("broadcast", { event: "signal" }, async (payload: any) => {
-      const msg = payload.payload as CamSignalMsg;
-
-      try {
-        if (msg.type === "hello") {
-          if (camStatus !== "connected") {
-            setCamStatus("waiting");
-            setCamStatusText("Telefoon klaar. Wachten op videostart…");
-          }
-          return;
-        }
-
-        const pcLocal = camPcRef.current;
-        if (!pcLocal) return;
-
-        if (msg.type === "offer") {
-          setCamStatus("connecting");
-          setCamStatusText("Verbinden…");
-
-          await pcLocal.setRemoteDescription(msg.sdp);
-          const answer = await pcLocal.createAnswer();
-          await pcLocal.setLocalDescription(answer);
-
-          await ch.send({
-            type: "broadcast",
-            event: "signal",
-            payload: { type: "answer", sdp: answer } satisfies CamSignalMsg,
-          });
-
-          return;
-        }
-
-        if (msg.type === "ice") {
-          await pcLocal.addIceCandidate(msg.candidate);
-          return;
-        }
-      } catch (e) {
-        console.error(e);
-        setCamStatus("error");
-        setCamStatusText("Fout in camera-verbinding.");
-      }
-    });
-
-    ch.subscribe();
-
-    try {
-      await ch.send({
-        type: "broadcast",
-        event: "signal",
-        payload: { type: "hello", at: Date.now() } satisfies CamSignalMsg,
-      });
-    } catch {}
-  }
-
-  useEffect(() => {
-    if (!camOpen) return;
-    startCameraReceiver().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camOpen]);
-
-  useEffect(() => {
-    return () => {
-      stopCameraReceiver().catch(() => {});
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // ✅ Main signaling channel
   useEffect(() => {
@@ -437,9 +285,10 @@ export default function ShareClient({ code }: { code: string }) {
 
     setStatus("idle");
 
-    // als camera connected is, laat die actief; anders none
-    if (camStatus === "connected") await broadcastActiveSource("camera");
-    else await broadcastActiveSource("none");
+    // Als we scherm stoppen, zet bron op none (tenzij je bewust telefoon toont)
+    if (activeSource === "screen") {
+      await broadcastActiveSource("none");
+    }
   }
 
   async function startShare() {
@@ -516,7 +365,7 @@ export default function ShareClient({ code }: { code: string }) {
       setStatus("sharing");
       startStatsLoop();
 
-      // ✅ Screen wordt de actieve bron (kind ziet scherm)
+      // ✅ Scherm is actief
       await broadcastActiveSource("screen");
     } catch (e) {
       console.error(e);
@@ -593,12 +442,14 @@ export default function ShareClient({ code }: { code: string }) {
       {/* ====== Modal voor Telefoon camera ====== */}
       {camOpen ? (
         <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-xl">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-lg font-semibold">Telefoon als extra camera</div>
                 <div className="text-sm text-slate-600 mt-1">
-                  Scan de QR-code met je telefoon. Start daarna de camera op de telefoon. Hier zie je live beeld terug.
+                  Scan de QR-code met je telefoon en start daar de camera.
+                  <br />
+                  Tip: laat het kind alvast verbonden zijn zodat de telefoon direct kan verbinden.
                 </div>
               </div>
               <button
@@ -610,106 +461,66 @@ export default function ShareClient({ code }: { code: string }) {
               </button>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* LEFT: QR/link */}
-              <div>
-                {!camLink ? (
-                  <div className="flex items-center justify-between gap-3">
-                    <Button variant="primary" onClick={createPhoneCameraLink} disabled={camLoading}>
-                      {camLoading ? "Link maken…" : "Maak QR / link"}
-                    </Button>
-                    <div className="text-xs text-slate-500">Link verloopt na ±30 minuten.</div>
+            <div className="mt-4">
+              {!camLink ? (
+                <div className="flex items-center justify-between gap-3">
+                  <Button variant="primary" onClick={createPhoneCameraLink} disabled={camLoading}>
+                    {camLoading ? "Link maken…" : "Maak QR / link"}
+                  </Button>
+                  <div className="text-xs text-slate-500">Link verloopt na ±30 minuten.</div>
+                </div>
+              ) : null}
+
+              {camError ? (
+                <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{camError}</div>
+              ) : null}
+
+              {camLink ? (
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                  <div className="rounded-xl border bg-slate-50 p-3">
+                    <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
+                    <div className="text-xs text-slate-500 mt-2">Werkt met iPhone/Android camera app of QR scanner.</div>
                   </div>
-                ) : null}
 
-                {camError ? (
-                  <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{camError}</div>
-                ) : null}
-
-                {camLink ? (
-                  <div className="mt-4 grid grid-cols-1 gap-4 items-start">
-                    <div className="rounded-xl border bg-slate-50 p-3">
-                      <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
-                      <div className="text-xs text-slate-500 mt-2">Werkt met iPhone/Android camera app of QR scanner.</div>
+                  <div className="rounded-xl border p-3">
+                    <div className="text-sm font-medium">Koppellink</div>
+                    <div className="mt-2 break-all text-xs text-slate-700">{camLink}</div>
+                    <div className="mt-3 flex gap-2">
+                      <Button onClick={() => copy(camLink)} className="flex-1">
+                        Kopieer link
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          setCamLink("");
+                          setCamError("");
+                        }}
+                        className="w-28"
+                      >
+                        Vernieuw
+                      </Button>
                     </div>
-
-                    <div className="rounded-xl border p-3">
-                      <div className="text-sm font-medium">Koppellink</div>
-                      <div className="mt-2 break-all text-xs text-slate-700">{camLink}</div>
-                      <div className="mt-3 flex gap-2">
-                        <Button onClick={() => copy(camLink)} className="flex-1">
-                          Kopieer link
-                        </Button>
-                        <Button
-                          onClick={() => {
-                            setCamLink("");
-                            setCamError("");
-                          }}
-                          className="w-28"
-                        >
-                          Vernieuw
-                        </Button>
-                      </div>
-                      <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-4 text-xs text-slate-500">
-                    Je kunt alvast de modal open laten. Zodra je telefoon start, verschijnt het beeld hier.
-                  </div>
-                )}
-              </div>
-
-              {/* RIGHT: Live camera preview (portrait) */}
-              <div className="rounded-xl border bg-slate-50 p-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium">Live camera</div>
-                  <div className="flex gap-2">
-                    <Button onClick={() => stopCameraReceiver()} className="h-9">
-                      Stop
-                    </Button>
+                    <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
                   </div>
                 </div>
+              ) : null}
 
-                <div className="mt-2 text-xs text-slate-600">
-                  Status:{" "}
+              <div className="mt-4 rounded-xl border bg-slate-50 p-3">
+                <div className="text-xs text-slate-600">
+                  Kind ziet nu:{" "}
                   <span className="font-semibold">
-                    {camStatus === "idle"
-                      ? "Idle"
-                      : camStatus === "waiting"
-                        ? "Wachten"
-                        : camStatus === "connecting"
-                          ? "Verbinden"
-                          : camStatus === "connected"
-                            ? "Verbonden"
-                            : "Fout"}
+                    {activeSource === "camera" ? "Telefoon" : activeSource === "screen" ? "Scherm" : "Niets"}
                   </span>
-                  {camStatusText ? <span className="ml-2 text-slate-500">• {camStatusText}</span> : null}
                 </div>
-
-                <div className="mt-3 mx-auto w-full max-w-[320px] rounded-xl overflow-hidden bg-black aspect-[9/16]">
-                  <video ref={camVideoRef} className="w-full h-full object-cover" />
+                <div className="mt-2 flex gap-2">
+                  <Button onClick={() => broadcastActiveSource("camera")} className="flex-1">
+                    Toon telefoon
+                  </Button>
+                  <Button onClick={() => broadcastActiveSource("screen")} disabled={status === "idle"} className="flex-1">
+                    Toon scherm
+                  </Button>
                 </div>
-
-                <div className="mt-3 rounded-xl border bg-white p-3">
-                  <div className="text-xs text-slate-600">
-                    Kind ziet nu: <span className="font-semibold">{activeSource === "camera" ? "Telefoon" : activeSource === "screen" ? "Scherm" : "Niets"}</span>
-                  </div>
-                  <div className="mt-2 flex gap-2">
-                    <Button onClick={() => broadcastActiveSource("camera")} disabled={camStatus !== "connected"} className="flex-1">
-                      Toon telefoon
-                    </Button>
-                    <Button onClick={() => broadcastActiveSource("screen")} disabled={status === "idle"} className="flex-1">
-                      Toon scherm
-                    </Button>
-                  </div>
-                  <div className="mt-2 text-[11px] text-slate-500">
-                    Tip: “Toon telefoon” werkt pas als de telefoon verbonden is. “Toon scherm” werkt pas als je scherm deelt.
-                  </div>
-                </div>
-
-                <div className="mt-2 text-xs text-slate-500">
-                  Zie je zwart beeld? Start de camera op je telefoon (en geef cameratoestemming).
+                <div className="mt-2 text-[11px] text-slate-500">
+                  “Toon telefoon” werkt zodra de telefoon start. Zorg dat het kind verbonden is met dezelfde code.
                 </div>
               </div>
             </div>
