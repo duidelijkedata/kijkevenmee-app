@@ -18,6 +18,11 @@ type RelatedUser = {
   use_koppelcode?: boolean | null;
 };
 
+type RelationshipRow = {
+  helper_id: string | null;
+  child_id: string | null;
+};
+
 export default function OuderStart() {
   const router = useRouter();
   const supabase = useMemo(() => supabaseBrowser(), []);
@@ -38,20 +43,32 @@ export default function OuderStart() {
       const uid = data?.user?.id ?? null;
       if (!uid) return;
 
-      const { data: rels } = await supabase
+      // ✅ BELANGRIJK: relaties kunnen in beide richtingen opgeslagen zijn.
+      // Daarom: helper_id = uid OF child_id = uid, en pak "de andere kant".
+      const { data: rels, error: relErr } = await supabase
         .from("helper_relationships")
-        .select("child_id")
-        .eq("helper_id", uid);
+        .select("child_id, helper_id")
+        .or(`helper_id.eq.${uid},child_id.eq.${uid}`);
 
-      const childIds = (rels ?? [])
-        .map((r: any) => r.child_id)
-        .filter(Boolean) as string[];
-      if (!childIds.length) return;
+      if (relErr) return;
+
+      const relatedIds = new Set<string>();
+      for (const r of (rels ?? []) as RelationshipRow[]) {
+        const helperId = r.helper_id ?? null;
+        const childId = r.child_id ?? null;
+
+        // pak de tegenpartij van uid
+        if (helperId === uid && childId) relatedIds.add(childId);
+        if (childId === uid && helperId) relatedIds.add(helperId);
+      }
+
+      const ids = Array.from(relatedIds).filter(Boolean);
+      if (!ids.length) return;
 
       const r = await fetch("/api/related-users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: childIds }),
+        body: JSON.stringify({ ids }),
       });
 
       const j = await r.json().catch(() => ({}));
@@ -60,13 +77,12 @@ export default function OuderStart() {
       const users: RelatedUser[] = Array.isArray(j?.users) ? (j.users as RelatedUser[]) : [];
       const byId = new Map<string, RelatedUser>(users.map((u) => [u.id, u]));
 
-      const mapped: LinkedChild[] = childIds
+      const mapped: LinkedChild[] = ids
         .map((id) => {
           const u = byId.get(id);
           if (!u) return null;
 
-          const label =
-            String(u.display_name ?? "").trim() || `Kind ${String(id).slice(0, 8)}…`;
+          const label = String(u.display_name ?? "").trim() || `Kind ${String(id).slice(0, 8)}…`;
 
           return {
             id,
@@ -81,9 +97,8 @@ export default function OuderStart() {
     })();
   }, [supabase]);
 
-  const selectedChild = selectedChildId
-    ? linkedChildren.find((c) => c.id === selectedChildId) ?? null
-    : null;
+  const selectedChild =
+    selectedChildId ? linkedChildren.find((c) => c.id === selectedChildId) ?? null : null;
 
   async function start() {
     setLoading(true);
