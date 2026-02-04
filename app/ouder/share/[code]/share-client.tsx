@@ -583,11 +583,17 @@ export default function ShareClient({ code }: { code: string }) {
                   <div className="mt-4 text-xs text-slate-500">
                     Kind ziet nu:{" "}
                     <span className="font-semibold">
-                      {activeSource === "camera" ? "Telefoon" : activeSource === "screen" ? "Scherm" : "Niets"}
+                     {activeSource === "screen"
+  ? "Scherm"
+  : activeSource === "camera"
+    ? "Telefoon"
+    : "Niets"}
+
                     </span>
-                    {activeSource === "camera" ? (
-                      <span className="text-slate-400"> (wacht op “Start camera” op telefoon)</span>
-                    ) : null}
+                   {activeSource !== "screen" && activeSource === "camera" ? (
+  <span className="text-slate-400"> (wacht op “Start camera” op telefoon)</span>
+) : null}
+
                   </div>
                 </div>
               </>
