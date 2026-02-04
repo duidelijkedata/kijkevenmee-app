@@ -6,7 +6,7 @@ import { supabaseBrowser } from "@/lib/supabase/browser";
 
 type ActiveSource = "screen" | "camera";
 
-type SignalMsg =
+type CamSignalMsg =
   | { type: "hello"; at: number }
   | { type: "offer"; sdp: any }
   | { type: "answer"; sdp: any }
@@ -27,16 +27,82 @@ export default function OuderCameraPage() {
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
 
-  // camera signaling kanaal
-  const channelRef = useRef<any>(null);
-  // hoofd-kanaal voor active_source switch
-  const mainChannelRef = useRef<any>(null);
+  const camChannelRef = useRef<any>(null);   // signalcam:${code}
+  const mainChannelRef = useRef<any>(null);  // signal:${code}
 
   useEffect(() => {
     const u = new URL(window.location.href);
     const t = u.searchParams.get("token") || "";
     setToken(t);
   }, []);
+
+  async function stop() {
+    try {
+      pcRef.current?.close();
+    } catch {}
+    pcRef.current = null;
+
+    try {
+      streamRef.current?.getTracks()?.forEach((t) => t.stop());
+    } catch {}
+    streamRef.current = null;
+
+    if (videoPreviewRef.current) {
+      try {
+        (videoPreviewRef.current as any).srcObject = null;
+      } catch {}
+    }
+
+    setErrorText("");
+    setStatus(code ? "ready" : "idle");
+  }
+
+  async function resolveTokenToCode(t: string): Promise<string> {
+    // We proberen meerdere endpoints omdat jouw project history laat zien
+    // dat deze route-namen vaker verschuiven.
+    const candidates: Array<{ url: string; parse: (json: any) => string | null }> = [
+      {
+        url: `/api/support/camera/validatie?token=${encodeURIComponent(t)}`,
+        parse: (j) => (typeof j?.code === "string" ? j.code : null),
+      },
+      {
+        url: `/api/support/camera/validate?token=${encodeURIComponent(t)}`,
+        parse: (j) => (typeof j?.code === "string" ? j.code : null),
+      },
+      {
+        url: `/api/support/camera-token/${encodeURIComponent(t)}`,
+        parse: (j) => (typeof j?.code === "string" ? j.code : null),
+      },
+      {
+        // sommige varianten returnen { support_code: ... }
+        url: `/api/support/camera-token/${encodeURIComponent(t)}`,
+        parse: (j) => (typeof j?.support_code === "string" ? j.support_code : null),
+      },
+    ];
+
+    let lastErr = "";
+
+    for (const c of candidates) {
+      try {
+        const res = await fetch(c.url, { method: "GET" });
+        const json = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          lastErr = json?.error || `HTTP ${res.status}`;
+          continue;
+        }
+
+        const maybe = c.parse(json);
+        if (maybe) return maybe;
+
+        lastErr = "Response bevat geen code.";
+      } catch (e: any) {
+        lastErr = e?.message || "Netwerkfout";
+      }
+    }
+
+    throw new Error(lastErr || "Kon token niet valideren.");
+  }
 
   // Resolve token -> support code
   useEffect(() => {
@@ -45,38 +111,29 @@ export default function OuderCameraPage() {
     (async () => {
       setStatus("resolving");
       setErrorText("");
+      setCode("");
 
       try {
-        // Let op: dit endpoint moet bestaan in jouw app (jij hebt ‘m al werkend gekregen)
-        const res = await fetch(`/api/support/camera/validatie?token=${encodeURIComponent(token)}`, { method: "GET" });
-        const json = await res.json();
-
-        if (!res.ok) {
-          setStatus("error");
-          setErrorText(json?.error || "Kon token niet valideren.");
-          return;
-        }
-
-        setCode(json.code);
+        const c = await resolveTokenToCode(token);
+        setCode(c);
         setStatus("ready");
-      } catch {
+      } catch (e: any) {
         setStatus("error");
-        setErrorText("Netwerkfout bij token validatie.");
+        setErrorText(e?.message || "Kon token niet valideren.");
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  // Setup realtime channels
+  // Setup realtime channels zodra code bekend is
   useEffect(() => {
     if (!code) return;
 
-    // Camera signaling (WebRTC)
-    const ch = supabase.channel(`signalcam:${code}`);
-    channelRef.current = ch;
+    const camCh = supabase.channel(`signalcam:${code}`);
+    camChannelRef.current = camCh;
 
-    ch.on("broadcast", { event: "signal" }, async (payload: any) => {
-      const msg = payload.payload as SignalMsg;
-
+    camCh.on("broadcast", { event: "signal" }, async (payload: any) => {
+      const msg = payload.payload as CamSignalMsg;
       try {
         const pc = pcRef.current;
         if (!pc) return;
@@ -98,67 +155,47 @@ export default function OuderCameraPage() {
       }
     });
 
-    // Hoofd kanaal om active_source te sturen (geen listener nodig)
-    const main = supabase.channel(`signal:${code}`);
-    mainChannelRef.current = main;
+    const mainCh = supabase.channel(`signal:${code}`);
+    mainChannelRef.current = mainCh;
 
-    ch.subscribe();
-    main.subscribe();
+    camCh.subscribe();
+    mainCh.subscribe();
 
     return () => {
       try {
-        supabase.removeChannel(ch);
+        supabase.removeChannel(camCh);
       } catch {}
       try {
-        supabase.removeChannel(main);
+        supabase.removeChannel(mainCh);
       } catch {}
-      channelRef.current = null;
+      camChannelRef.current = null;
       mainChannelRef.current = null;
     };
   }, [supabase, code]);
 
-  async function stop() {
-    try {
-      pcRef.current?.close();
-    } catch {}
-    pcRef.current = null;
-
-    try {
-      streamRef.current?.getTracks()?.forEach((t) => t.stop());
-    } catch {}
-    streamRef.current = null;
-
-    if (videoPreviewRef.current) {
-      try {
-        (videoPreviewRef.current as any).srcObject = null;
-      } catch {}
-    }
-
-    setStatus(code ? "ready" : "idle");
-    setErrorText("");
-  }
-
-  async function broadcastActiveSource(source: ActiveSource) {
+  function fireActiveSourceCamera() {
     const main = mainChannelRef.current;
     if (!main) return;
-    try {
-      await main.send({
+
+    // Fire-and-forget: mag nooit je Start Camera blokkeren
+    main
+      .send({
         type: "broadcast",
         event: "signal",
-        payload: { type: "active_source", source } satisfies MainSignalMsg,
+        payload: { type: "active_source", source: "camera" } satisfies MainSignalMsg,
+      })
+      .catch((e: any) => {
+        console.warn("active_source broadcast failed", e);
       });
-    } catch (e) {
-      // niet fatal; camera kan nog steeds streamen, maar kind switcht dan niet
-      console.warn("broadcastActiveSource failed", e);
-    }
   }
 
   async function startCamera() {
     if (!code) return;
 
     setErrorText("");
+    setStatus("connecting");
 
-    // Eerst opruimen (oude pc/stream), daarna status
+    // opruimen oude stream/pc
     await stop();
     setStatus("connecting");
 
@@ -168,11 +205,11 @@ export default function OuderCameraPage() {
     pcRef.current = pc;
 
     pc.onicecandidate = (e) => {
-      if (e.candidate && channelRef.current) {
-        channelRef.current.send({
+      if (e.candidate && camChannelRef.current) {
+        camChannelRef.current.send({
           type: "broadcast",
           event: "signal",
-          payload: { type: "ice", candidate: e.candidate } satisfies SignalMsg,
+          payload: { type: "ice", candidate: e.candidate } satisfies CamSignalMsg,
         });
       }
     };
@@ -203,26 +240,24 @@ export default function OuderCameraPage() {
         await videoPreviewRef.current.play().catch(() => {});
       }
 
-      // ✅ BELANGRIJK: PAS NU schakelen we het kind over naar telefoon
-      await broadcastActiveSource("camera");
+      // ✅ pas NU switchen we het kind naar de telefoonbron (begeleiden bij QR blijft mogelijk)
+      fireActiveSourceCamera();
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      await channelRef.current?.send({
+      await camChannelRef.current?.send({
         type: "broadcast",
         event: "signal",
-        payload: { type: "offer", sdp: offer } satisfies SignalMsg,
+        payload: { type: "offer", sdp: offer } satisfies CamSignalMsg,
       });
 
-      // “hello” helpt bij later subscriben
-      await channelRef.current?.send({
+      await camChannelRef.current?.send({
         type: "broadcast",
         event: "signal",
-        payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
+        payload: { type: "hello", at: Date.now() } satisfies CamSignalMsg,
       });
 
-      // status blijft connecting tot answer binnen is
       setStatus("connecting");
     } catch (e: any) {
       console.error(e);
