@@ -74,22 +74,27 @@ export default function ShareClient({ code }: { code: string }) {
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const origin =
-    typeof window !== "undefined" && window.location?.origin ? window.location.origin : "https://kijkevenmee-app.vercel.app";
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "https://kijkevenmee-app.vercel.app";
 
-  // ====== Telefoon camera modal ======
+  // ====== Telefoon camera overlay ======
   const [camOpen, setCamOpen] = useState(false);
   const [camLoading, setCamLoading] = useState(false);
   const [camError, setCamError] = useState<string>("");
   const [camLink, setCamLink] = useState<string>("");
+
   const [activeSource, setActiveSource] = useState<ActiveSource>("screen");
 
-  // ✅ preview frames (geen 2e WebRTC; alleen jpeg frames)
+  // preview frames (jpeg frames via broadcast)
   const [camPreviewJpeg, setCamPreviewJpeg] = useState<string>("");
   const [camPreviewAt, setCamPreviewAt] = useState<number>(0);
 
-  // "live" heuristiek: zodra source=camera OF we krijgen preview frames, gaan we naar live overlay
-  // ✅ TS-safe: vergelijk activeSource als string zodat build niet omvalt als TS de union “vernauwt”
-  const phoneIsLive = (activeSource as string) === "camera" || !!camPreviewJpeg;
+  // ✅ belangrijk: overlay pas "live" zodra we echt frames ontvangen
+  const [camLive, setCamLive] = useState<boolean>(false);
+
+  // overlay is live als camLive true is (dus telefoon heeft “Start camera” gedrukt)
+  const phoneIsLive = camLive;
 
   async function broadcastActiveSource(source: ActiveSource) {
     setActiveSource(source);
@@ -125,7 +130,7 @@ export default function ShareClient({ code }: { code: string }) {
       const url = `${origin}/ouder/camera?token=${encodeURIComponent(json.token)}`;
       setCamLink(url);
       setCamLoading(false);
-    } catch (e) {
+    } catch {
       setCamError("Netwerkfout bij aanmaken telefoon-link.");
       setCamLoading(false);
     }
@@ -137,7 +142,7 @@ export default function ShareClient({ code }: { code: string }) {
     } catch {}
   }
 
-  // ✅ Main signaling channel
+  // ===== Signaling =====
   useEffect(() => {
     const ch = supabase.channel(`signal:${code}`);
     channelRef.current = ch;
@@ -160,6 +165,7 @@ export default function ShareClient({ code }: { code: string }) {
         if (msg.type === "cam_preview") {
           setCamPreviewJpeg(msg.jpeg);
           setCamPreviewAt(msg.at || Date.now());
+          setCamLive(true); // ✅ pas nu wordt overlay "live"
           return;
         }
 
@@ -455,6 +461,10 @@ export default function ShareClient({ code }: { code: string }) {
     await broadcastActiveSource("screen");
     setCamOpen(false);
 
+    setCamLive(false);
+    setCamPreviewJpeg("");
+    setCamPreviewAt(0);
+
     if (status === "idle") {
       await startShare();
     }
@@ -469,7 +479,9 @@ export default function ShareClient({ code }: { code: string }) {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-lg font-semibold">Telefoon als extra camera</div>
-                <div className="text-sm text-slate-600 mt-1">Scan de QR-code met je telefoon en start daar de camera.</div>
+                <div className="text-sm text-slate-600 mt-1">
+                  {phoneIsLive ? "Live beeld is actief. Je ziet hier wat het kind ziet." : "Scan de QR-code met je telefoon en start daar de camera."}
+                </div>
               </div>
               <button
                 className="h-10 w-10 rounded-xl border bg-white hover:bg-slate-50"
@@ -480,7 +492,7 @@ export default function ShareClient({ code }: { code: string }) {
               </button>
             </div>
 
-            {/* Als live: alleen preview + stop */}
+            {/* Live-mode: alleen preview + stop */}
             {phoneIsLive ? (
               <div className="mt-4 rounded-2xl border bg-slate-50 p-3">
                 <div className="text-xs text-slate-600 mb-2 flex items-center justify-between">
@@ -497,7 +509,7 @@ export default function ShareClient({ code }: { code: string }) {
                       <img src={camPreviewJpeg} alt="Live preview" className="absolute inset-0 h-full w-full object-cover" />
                     ) : (
                       <div className="absolute inset-0 flex items-center justify-center text-white/70 text-sm">
-                        Nog geen beeld. Start de camera op de telefoon.
+                        Wacht op het eerste beeld…
                       </div>
                     )}
                   </div>
@@ -515,7 +527,7 @@ export default function ShareClient({ code }: { code: string }) {
               </div>
             ) : (
               <>
-                {/* QR/link (alleen zolang we nog niet live zijn) */}
+                {/* QR/link-mode */}
                 <div className="mt-4">
                   {!camLink ? (
                     <div className="flex items-center justify-between gap-3">
@@ -568,7 +580,7 @@ export default function ShareClient({ code }: { code: string }) {
                           ? "Telefoon"
                           : "Niets"}
                     </span>
-                    {activeSource !== "screen" && (activeSource as string) === "camera" ? (
+                    {(activeSource as string) === "camera" ? (
                       <span className="text-slate-400"> (wacht op “Start camera” op telefoon)</span>
                     ) : null}
                   </div>
@@ -598,12 +610,17 @@ export default function ShareClient({ code }: { code: string }) {
 
                   <Button
                     onClick={async () => {
+                      // reset zodat je altijd eerst QR ziet
+                      setCamLive(false);
+                      setCamPreviewJpeg("");
+                      setCamPreviewAt(0);
+
                       setCamOpen(true);
                       setCamError("");
                       setCamLink("");
                       setCamLoading(false);
 
-                      // QR tonen aan kind (maar pas "live" zodra telefoon start)
+                      // Kind mag QR begeleiding zien
                       await broadcastActiveSource("camera");
                     }}
                   >
@@ -673,7 +690,9 @@ export default function ShareClient({ code }: { code: string }) {
                           key={p.id}
                           onClick={() => setActivePacketId(p.id)}
                           className={`text-left rounded-xl border px-3 py-2 ${
-                            p.id === activePacketId ? "bg-white text-black" : "bg-transparent text-white/90 border-white/20"
+                            p.id === activePacketId
+                              ? "bg-white text-black"
+                              : "bg-transparent text-white/90 border-white/20"
                           }`}
                         >
                           <div className="text-xs opacity-80">
