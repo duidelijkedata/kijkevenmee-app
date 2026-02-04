@@ -10,37 +10,12 @@ type SignalMsg =
   | { type: "answer"; sdp: any }
   | { type: "ice"; candidate: any };
 
-type ValidateOk = {
-  ok: true;
-  support_code: string;
-  owner_user_id?: string;
-  expires_at?: string;
-};
-
-type ValidateErr = {
-  error?: string;
-};
-
-async function safeJson(res: Response) {
-  try {
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-function prettyTokenError(err: string) {
-  if (err === "missing_token") return "Geen token in de link gevonden.";
-  if (err === "token_not_found") return "Deze link is ongeldig of al gebruikt.";
-  if (err === "token_expired") return "Deze link is verlopen. Maak een nieuwe QR/link op de laptop.";
-  return "Kon token niet valideren.";
-}
+type PreviewMsg = { type: "cam_preview"; jpeg: string; at: number };
 
 export default function OuderCameraPage() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [status, setStatus] = useState<"idle" | "resolving" | "ready" | "connecting" | "connected" | "error">("idle");
   const [errorText, setErrorText] = useState<string>("");
-
   const [code, setCode] = useState<string>("");
   const [token, setToken] = useState<string>("");
 
@@ -49,47 +24,36 @@ export default function OuderCameraPage() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const channelRef = useRef<any>(null);
 
+  // extra channel voor preview frames → ouder overlay (signal:${code})
+  const previewChannelRef = useRef<any>(null);
+  const previewTimerRef = useRef<any>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
   useEffect(() => {
     const u = new URL(window.location.href);
     const t = u.searchParams.get("token") || "";
     setToken(t);
   }, []);
 
-  // Resolve token -> support code (publieke validate endpoint)
+  // Resolve token -> support code
   useEffect(() => {
-    if (!token) {
-      setStatus("error");
-      setErrorText("Geen token in de URL. Scan de QR-code opnieuw.");
-      return;
-    }
+    if (!token) return;
 
     (async () => {
       setStatus("resolving");
       setErrorText("");
 
       try {
-        const res = await fetch(`/api/support/camera/validate?token=${encodeURIComponent(token)}`, {
-          method: "GET",
-          cache: "no-store",
-        });
-
-        const json = (await safeJson(res)) as (ValidateOk & ValidateErr) | null;
+        const res = await fetch(`/api/support/camera-token/${encodeURIComponent(token)}`, { method: "GET" });
+        const json = await res.json();
 
         if (!res.ok) {
-          const err = json?.error || "unknown";
           setStatus("error");
-          setErrorText(prettyTokenError(err));
+          setErrorText(json?.error || "Kon token niet valideren.");
           return;
         }
 
-        const ok = json as ValidateOk;
-        if (!ok?.support_code) {
-          setStatus("error");
-          setErrorText("Token is geldig, maar sessiecode ontbreekt. Probeer een nieuwe link.");
-          return;
-        }
-
-        setCode(ok.support_code);
+        setCode(json.code);
         setStatus("ready");
       } catch (e: any) {
         setStatus("error");
@@ -138,7 +102,80 @@ export default function OuderCameraPage() {
     };
   }, [supabase, code]);
 
+  // Setup preview broadcast channel
+  useEffect(() => {
+    if (!code) return;
+
+    const ch = supabase.channel(`signal:${code}`);
+    previewChannelRef.current = ch;
+    ch.subscribe();
+
+    return () => {
+      try {
+        supabase.removeChannel(ch);
+      } catch {}
+      previewChannelRef.current = null;
+    };
+  }, [supabase, code]);
+
+  function stopPreviewLoop() {
+    if (previewTimerRef.current) {
+      clearInterval(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+  }
+
+  function startPreviewLoop() {
+    stopPreviewLoop();
+
+    // 1 fps is genoeg voor “wat ziet het kind”
+    previewTimerRef.current = setInterval(async () => {
+      try {
+        const v = videoPreviewRef.current;
+        const ch = previewChannelRef.current;
+        if (!v || !ch) return;
+        if (v.readyState < 2) return;
+
+        let canvas = previewCanvasRef.current;
+        if (!canvas) {
+          canvas = document.createElement("canvas");
+          previewCanvasRef.current = canvas;
+        }
+
+        // kleine preview: 360px breed (scheelt data)
+        const targetW = 360;
+        const vw = v.videoWidth || 1280;
+        const vh = v.videoHeight || 720;
+        if (!vw || !vh) return;
+
+        const scale = targetW / vw;
+        const targetH = Math.round(vh * scale);
+
+        canvas.width = targetW;
+        canvas.height = targetH;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        ctx.drawImage(v, 0, 0, targetW, targetH);
+
+        const jpeg = canvas.toDataURL("image/jpeg", 0.6);
+        const pkt: PreviewMsg = { type: "cam_preview", jpeg, at: Date.now() };
+
+        await ch.send({
+          type: "broadcast",
+          event: "signal",
+          payload: pkt,
+        });
+      } catch {
+        // silent
+      }
+    }, 1000);
+  }
+
   async function stop() {
+    stopPreviewLoop();
+
     try {
       pcRef.current?.close();
     } catch {}
@@ -202,6 +239,9 @@ export default function OuderCameraPage() {
         videoPreviewRef.current.playsInline = true;
         await videoPreviewRef.current.play().catch(() => {});
       }
+
+      // ✅ start preview loop (naar ouder overlay)
+      startPreviewLoop();
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
