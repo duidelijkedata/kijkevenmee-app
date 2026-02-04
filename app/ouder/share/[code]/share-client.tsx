@@ -38,16 +38,11 @@ function qualityLabel(q: Quality) {
 }
 
 /**
- * ✅ Voorstel 1: hogere bitrate (8–12 Mbps)
- * ✅ Voorstel 2: hogere fps waar zinvol (maar high blijft 30fps i.v.m. CPU)
+ * ✅ hogere bitrate + maintain-resolution
  */
 function qualityParams(q: Quality) {
-  if (q === "low") {
-    return { maxBitrate: 2_500_000, idealFps: 15, maxFps: 20 };
-  }
-  if (q === "medium") {
-    return { maxBitrate: 8_000_000, idealFps: 30, maxFps: 30 };
-  }
+  if (q === "low") return { maxBitrate: 2_500_000, idealFps: 15, maxFps: 20 };
+  if (q === "medium") return { maxBitrate: 8_000_000, idealFps: 30, maxFps: 30 };
   return { maxBitrate: 12_000_000, idealFps: 30, maxFps: 60 };
 }
 
@@ -87,6 +82,48 @@ export default function ShareClient({ code }: { code: string }) {
 
   const origin =
     typeof window !== "undefined" && window.location?.origin ? window.location.origin : "https://kijkevenmee-app.vercel.app";
+
+  // ====== NIEUW: telefoon camera modal state ======
+  const [camOpen, setCamOpen] = useState(false);
+  const [camLoading, setCamLoading] = useState(false);
+  const [camError, setCamError] = useState<string>("");
+  const [camLink, setCamLink] = useState<string>("");
+
+  function qrUrl(data: string) {
+    // 3rd party QR image service — fallback is always: copy/paste link
+    const size = "240x240";
+    return `https://api.qrserver.com/v1/create-qr-code/?size=${size}&data=${encodeURIComponent(data)}`;
+  }
+
+  async function createPhoneCameraLink() {
+    setCamLoading(true);
+    setCamError("");
+    setCamLink("");
+
+    try {
+      const res = await fetch(`/api/support/${encodeURIComponent(code)}/camera-token`, { method: "POST" });
+      const json = await res.json();
+
+      if (!res.ok) {
+        setCamError(json?.error || "Kon telefoon-link niet maken.");
+        setCamLoading(false);
+        return;
+      }
+
+      const url = `${origin}/ouder/camera?token=${encodeURIComponent(json.token)}`;
+      setCamLink(url);
+      setCamLoading(false);
+    } catch (e) {
+      setCamError("Netwerkfout bij aanmaken telefoon-link.");
+      setCamLoading(false);
+    }
+  }
+
+  async function copy(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {}
+  }
 
   // ✅ Maak channel 1x en blijf daarop luisteren (ook wanneer idle)
   useEffect(() => {
@@ -153,11 +190,6 @@ export default function ShareClient({ code }: { code: string }) {
     } catch {}
   }
 
-  /**
-   * ✅ Voorstel 1: maxBitrate omhoog
-   * ✅ Extra: maintain-resolution (minder “blur” bij tekst)
-   * ✅ Extra: scaleResolutionDownBy = 1 (niet downsizen)
-   */
   async function applySenderQuality(pc: RTCPeerConnection, q: Quality) {
     const { maxBitrate, idealFps, maxFps } = qualityParams(q);
     const sender = pc.getSenders().find((s) => s.track?.kind === "video");
@@ -198,38 +230,37 @@ export default function ShareClient({ code }: { code: string }) {
 
   function startStatsLoop() {
     stopStatsLoop();
+
     statsTimerRef.current = setInterval(async () => {
       try {
         const pc = pcRef.current;
-        if (!pc || !auto) return;
+        if (!pc) return;
 
         const stats = await pc.getStats();
-        let bytesSent: number | null = null;
+        let outbound: any = null;
 
-        stats.forEach((r: any) => {
-          if (r.type === "outbound-rtp" && r.kind === "video") {
-            if (typeof r.bytesSent === "number") bytesSent = r.bytesSent;
-          }
+        stats.forEach((r) => {
+          if (r.type === "outbound-rtp" && (r as any).kind === "video") outbound = r;
         });
 
-        const now = Date.now();
-        let bitrateBps: number | null = null;
+        if (!outbound) return;
 
-        if (bytesSent != null && lastBytesSentRef.current != null && lastStatsAtRef.current != null) {
+        const now = Date.now();
+        const bytesSent = outbound.bytesSent || 0;
+
+        if (lastBytesSentRef.current != null && lastStatsAtRef.current != null) {
           const dt = (now - lastStatsAtRef.current) / 1000;
-          if (dt > 0) {
-            const dBytes = bytesSent - lastBytesSentRef.current;
-            bitrateBps = Math.max(0, Math.round((dBytes * 8) / dt));
-          }
+          const db = bytesSent - lastBytesSentRef.current;
+          const mbps = (db * 8) / (dt * 1_000_000);
+
+          const fps = outbound.framesPerSecond ? ` • ${Math.round(outbound.framesPerSecond)}fps` : "";
+          setDebugLine(`${mbps.toFixed(1)} Mbps${fps}`);
         }
 
-        if (bytesSent != null) lastBytesSentRef.current = bytesSent;
+        lastBytesSentRef.current = bytesSent;
         lastStatsAtRef.current = now;
-
-        const kbps = bitrateBps != null ? Math.round(bitrateBps / 1000) : null;
-        setDebugLine(`bitrate=${kbps ?? "?"}kbps`);
       } catch {}
-    }, 1500);
+    }, 1200);
   }
 
   async function stopShare() {
@@ -241,7 +272,7 @@ export default function ShareClient({ code }: { code: string }) {
     pcRef.current = null;
 
     try {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current?.getTracks()?.forEach((t) => t.stop());
     } catch {}
     streamRef.current = null;
 
@@ -251,14 +282,9 @@ export default function ShareClient({ code }: { code: string }) {
       } catch {}
     }
 
-    lastOfferRef.current = null;
     setStatus("idle");
   }
 
-  /**
-   * ✅ Voorstel 2: 1080p constraints bij capture
-   * ✅ Voorstel 3: contentHint = "text"
-   */
   async function startShare() {
     await stopShare();
     setStatus("sharing");
@@ -283,7 +309,6 @@ export default function ShareClient({ code }: { code: string }) {
 
       const stream = await (navigator.mediaDevices as any).getDisplayMedia({
         video: {
-          // ✅ 1080p “best effort”
           width: { ideal: 1920 },
           height: { ideal: 1080 },
           frameRate: { ideal: qp.idealFps, max: qp.maxFps },
@@ -294,12 +319,10 @@ export default function ShareClient({ code }: { code: string }) {
       const track = stream.getVideoTracks()[0];
       track.addEventListener("ended", () => stopShare());
 
-      // ✅ content hint voor tekst/UI (Chromium)
       try {
         (track as any).contentHint = "text";
       } catch {}
 
-      // best effort: nogmaals constraints
       try {
         await (track as any).applyConstraints?.({
           width: { ideal: 1920 },
@@ -340,279 +363,263 @@ export default function ShareClient({ code }: { code: string }) {
       console.error(e);
       setStatus("error");
       await stopShare();
-      alert("Scherm delen geweigerd of mislukt.");
     }
   }
 
-  // Snapshot overlay drawing loop (kind shapes) — DPR is al goed ✅
+  // ===== Snapshot viewer rendering (zoals je al had) =====
   useEffect(() => {
-    let raf = 0;
+    if (!activePacketId) return;
+    const p = packets.find((x) => x.id === activePacketId);
+    if (!p) return;
 
-    function resizeCanvas() {
-      const wrap = snapshotWrapRef.current;
-      const c = snapshotCanvasRef.current;
-      if (!wrap || !c) return;
+    // mark seen
+    setPackets((prev) => prev.map((x) => (x.id === p.id ? { ...x, seen: true } : x)));
 
-      const w = wrap.clientWidth;
-      const h = wrap.clientHeight;
-      if (!w || !h) return;
+    // draw snapshot
+    const canvas = snapshotCanvasRef.current;
+    if (!canvas) return;
 
-      const dpr = window.devicePixelRatio || 1;
-      c.width = Math.floor(w * dpr);
-      c.height = Math.floor(h * dpr);
-      c.style.width = `${w}px`;
-      c.style.height = `${h}px`;
-    }
+    const img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth || 1280;
+      const h = img.naturalHeight || 720;
+      canvas.width = w;
+      canvas.height = h;
 
-    function drawArrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number) {
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-
-      const angle = Math.atan2(y2 - y1, x2 - x1);
-      const head = 22;
-      const a1 = angle - Math.PI / 7;
-      const a2 = angle + Math.PI / 7;
-
-      ctx.beginPath();
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - head * Math.cos(a1), y2 - head * Math.sin(a1));
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - head * Math.cos(a2), y2 - head * Math.sin(a2));
-      ctx.stroke();
-    }
-
-    function loop() {
-      const wrap = snapshotWrapRef.current;
-      const c = snapshotCanvasRef.current;
-      if (!wrap || !c) {
-        raf = requestAnimationFrame(loop);
-        return;
-      }
-
-      resizeCanvas();
-      const ctx = c.getContext("2d");
-      if (!ctx) {
-        raf = requestAnimationFrame(loop);
-        return;
-      }
-
-      const dpr = window.devicePixelRatio || 1;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      const w = wrap.clientWidth;
-      const h = wrap.clientHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
       ctx.clearRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
 
-      const active = packets.find((p) => p.id === activePacketId) ?? null;
-      if (!active) {
-        raf = requestAnimationFrame(loop);
-        return;
-      }
-
+      // shapes
       ctx.lineWidth = 6;
-      ctx.strokeStyle = "#60a5fa";
-      ctx.shadowColor = "rgba(0,0,0,0.35)";
-      ctx.shadowBlur = 8;
+      ctx.strokeStyle = "#ff3b30";
+      ctx.fillStyle = "rgba(255,59,48,0.15)";
 
-      for (const s of active.shapes) {
+      for (const s of p.shapes) {
         if (s.kind === "circle") {
-          const x = s.x * w;
-          const y = s.y * h;
-          const r = s.r * Math.max(w, h);
           ctx.beginPath();
-          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
           ctx.stroke();
         } else if (s.kind === "rect") {
-          ctx.strokeRect(s.x * w, s.y * h, s.w * w, s.h * h);
-        } else {
-          drawArrow(ctx, s.x1 * w, s.y1 * h, s.x2 * w, s.y2 * h);
+          ctx.beginPath();
+          ctx.rect(s.x, s.y, s.w, s.h);
+          ctx.fill();
+          ctx.stroke();
+        } else if (s.kind === "arrow") {
+          // basic arrow
+          const { x1, y1, x2, y2 } = s;
+          const head = 18;
+          const angle = Math.atan2(y2 - y1, x2 - x1);
+
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(x2, y2);
+          ctx.lineTo(x2 - head * Math.cos(angle - Math.PI / 6), y2 - head * Math.sin(angle - Math.PI / 6));
+          ctx.lineTo(x2 - head * Math.cos(angle + Math.PI / 6), y2 - head * Math.sin(angle + Math.PI / 6));
+          ctx.closePath();
+          ctx.fillStyle = "#ff3b30";
+          ctx.fill();
+          ctx.fillStyle = "rgba(255,59,48,0.15)";
         }
       }
-
-      ctx.shadowBlur = 0;
-      raf = requestAnimationFrame(loop);
-    }
-
-    raf = requestAnimationFrame(loop);
-    const onResize = () => resizeCanvas();
-    window.addEventListener("resize", onResize);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", onResize);
     };
-  }, [packets, activePacketId]);
 
-  useEffect(() => {
-    return () => {
-      stopShare();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const unseenCount = packets.filter((p) => !p.seen).length;
-  const active = packets.find((p) => p.id === activePacketId) ?? null;
-
-  function clearAll() {
-    setPackets([]);
-    setActivePacketId(null);
-  }
-
-  const shareUrl = `${origin}/ouder/share/${encodeURIComponent(code)}`;
-  const kidUrl = `${origin}/kind/verbinden`;
+    img.src = p.snapshotJpeg;
+  }, [activePacketId, packets]);
 
   return (
-    <FullscreenShell
-      sidebarTitle="Ouder"
-      sidebar={
-        <div className="flex flex-col gap-3">
-          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
-            <div className="text-sm text-white/60">Code</div>
-            <div className="text-lg font-mono text-white">{code}</div>
-
-            <div className="mt-2 text-xs text-white/60">
-              Kind opent: <span className="font-mono text-white/80">{kidUrl}</span>
-            </div>
-            <div className="text-xs text-white/60">
-              Deze pagina: <span className="font-mono text-white/80">{shareUrl}</span>
-            </div>
-
-            {unseenCount > 0 ? (
-              <div className="mt-2 text-xs">
-                <span className="rounded-full bg-blue-500/20 text-blue-200 px-2 py-0.5">{unseenCount} nieuw</span>
+    <FullscreenShell>
+      {/* ====== NIEUW: Modal voor Telefoon camera ====== */}
+      {camOpen ? (
+        <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-lg font-semibold">Telefoon als extra camera</div>
+                <div className="text-sm text-slate-600 mt-1">
+                  Scan de QR-code met je telefoon. Je browser opent een pagina die jouw camera streamt.
+                </div>
               </div>
-            ) : null}
-          </div>
-
-          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
-            <div className="text-sm text-white/60 mb-2">Delen</div>
-
-            <div className="flex flex-col gap-2">
-              <select
-                value={quality}
-                onChange={(e) => setQuality(e.target.value as Quality)}
-                className="h-10 rounded-xl border px-3 bg-white text-slate-900"
-                disabled={status !== "idle"}
-                title={status !== "idle" ? "Stop eerst delen om startkwaliteit te wijzigen" : ""}
+              <button
+                className="h-10 w-10 rounded-xl border bg-white hover:bg-slate-50"
+                onClick={() => setCamOpen(false)}
+                aria-label="Sluiten"
               >
-                <option value="low">{qualityLabel("low")}</option>
-                <option value="medium">{qualityLabel("medium")}</option>
-                <option value="high">{qualityLabel("high")}</option>
-              </select>
+                ✕
+              </button>
+            </div>
 
-              <label className="flex items-center gap-2 text-sm text-white/80">
-                <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} disabled={status === "idle"} />
-                Auto kwaliteit
-              </label>
+            <div className="mt-4">
+              {!camLink ? (
+                <div className="flex items-center justify-between gap-3">
+                  <Button variant="primary" onClick={createPhoneCameraLink} disabled={camLoading}>
+                    {camLoading ? "Link maken…" : "Maak QR / link"}
+                  </Button>
+                  <div className="text-xs text-slate-500">
+                    Link verloopt na ±30 minuten.
+                  </div>
+                </div>
+              ) : null}
 
-              <label className="flex items-center gap-2 text-sm text-white/80">
-                <input
-                  type="checkbox"
-                  checked={showPreview}
-                  onChange={(e) => setShowPreview(e.target.checked)}
-                  disabled={status === "idle"}
-                />
-                Toon preview (kan “scherm-in-scherm” geven)
-              </label>
+              {camError ? (
+                <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{camError}</div>
+              ) : null}
 
-              {status === "idle" ? (
-                <Button variant="primary" onClick={startShare}>
-                  Deel scherm
-                </Button>
-              ) : (
-                <Button onClick={stopShare}>Stop</Button>
-              )}
+              {camLink ? (
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                  <div className="rounded-xl border bg-slate-50 p-3">
+                    <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
+                    <div className="text-xs text-slate-500 mt-2">
+                      Werkt met iPhone/Android camera app of QR scanner.
+                    </div>
+                  </div>
 
-              {status !== "idle" ? <div className="text-xs text-white/60 font-mono">{debugLine || "stats…"}</div> : null}
+                  <div className="rounded-xl border p-3">
+                    <div className="text-sm font-medium">Koppellink</div>
+                    <div className="mt-2 break-all text-xs text-slate-700">{camLink}</div>
+                    <div className="mt-3 flex gap-2">
+                      <Button onClick={() => copy(camLink)} className="flex-1">
+                        Kopieer link
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          setCamLink("");
+                          setCamError("");
+                        }}
+                        className="w-28"
+                      >
+                        Vernieuw
+                      </Button>
+                    </div>
+                    <div className="mt-3 text-xs text-slate-500">
+                      Tip: open de link op de telefoon en kies “Sta camera toe”.
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
+        </div>
+      ) : null}
 
-          <div className="rounded-xl bg-white/5 border border-white/10 p-3">
-            <div className="flex items-center justify-between gap-2 mb-2">
-              <div className="text-sm text-white/60">Aanwijzingen</div>
-              {packets.length > 0 ? <Button onClick={clearAll}>Wis</Button> : null}
+      {/* ====== Bestaande UI ====== */}
+      <div className="h-screen w-screen bg-black">
+        <ViewerStage
+          left={
+            <div className="p-3 flex flex-col gap-3">
+              <div className="text-white text-sm font-semibold">Ouder – scherm delen</div>
+
+              <div className="flex gap-2 flex-wrap">
+                <Button variant="primary" onClick={startShare} disabled={status === "sharing" || status === "connected"}>
+                  Start delen
+                </Button>
+                <Button onClick={stopShare} disabled={status === "idle"}>
+                  Stop
+                </Button>
+
+                {/* NIEUW: telefoon camera */}
+                <Button
+                  onClick={() => {
+                    setCamOpen(true);
+                    setCamError("");
+                    setCamLink("");
+                    setCamLoading(false);
+                  }}
+                >
+                  Telefoon als camera
+                </Button>
+              </div>
+
+              <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
+                <div>Status: <span className="font-semibold">{status}</span></div>
+                {debugLine ? <div className="mt-1 text-xs opacity-80">{debugLine}</div> : null}
+              </div>
+
+              <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
+                <div className="font-semibold">Kwaliteit</div>
+                <div className="mt-2 flex gap-2 flex-wrap">
+                  {(["low", "medium", "high"] as Quality[]).map((q) => (
+                    <Button
+                      key={q}
+                      variant={quality === q ? "primary" : "secondary"}
+                      onClick={async () => {
+                        setQuality(q);
+                        const pc = pcRef.current;
+                        if (pc) await applySenderQuality(pc, q);
+                      }}
+                    >
+                      {qualityLabel(q)}
+                    </Button>
+                  ))}
+                </div>
+
+                <label className="mt-3 flex items-center gap-2 text-xs opacity-90 select-none">
+                  <input
+                    type="checkbox"
+                    checked={auto}
+                    onChange={(e) => setAuto(e.target.checked)}
+                  />
+                  Auto (placeholder voor later)
+                </label>
+
+                <label className="mt-2 flex items-center gap-2 text-xs opacity-90 select-none">
+                  <input
+                    type="checkbox"
+                    checked={showPreview}
+                    onChange={(e) => setShowPreview(e.target.checked)}
+                  />
+                  Preview tonen (kan mirror-effect geven)
+                </label>
+              </div>
             </div>
+          }
+          center={
+            <div className="h-full w-full flex items-center justify-center">
+              {/* preview is optioneel */}
+              <video ref={videoRef} className="max-h-full max-w-full" />
+            </div>
+          }
+          right={
+            <div className="p-3 flex flex-col gap-3">
+              <div className="text-white text-sm font-semibold">Aantekeningen van kind</div>
 
-            {packets.length === 0 ? (
-              <p className="text-sm text-white/70">
-                Nog geen aanwijzingen. Het kind tekent en klikt op <b>Delen</b>.
-              </p>
-            ) : (
-              <div className="space-y-2" style={{ maxHeight: "55vh", overflow: "auto" }}>
-                {packets
-                  .slice()
-                  .reverse()
-                  .map((p) => (
+              <div className="rounded-xl bg-white/10 p-3 text-white text-sm">
+                <div className="text-xs opacity-80">Laatste snapshots</div>
+
+                <div className="mt-2 flex flex-col gap-2 max-h-[40vh] overflow-auto pr-1">
+                  {packets.slice().reverse().map((p) => (
                     <button
                       key={p.id}
-                      onClick={() => {
-                        setActivePacketId(p.id);
-                        setPackets((prev) => prev.map((x) => (x.id === p.id ? { ...x, seen: true } : x)));
-                      }}
-                      className={`w-full text-left rounded-xl border p-2 transition ${
-                        activePacketId === p.id ? "border-white/60" : "border-white/10 hover:border-white/30"
+                      onClick={() => setActivePacketId(p.id)}
+                      className={`text-left rounded-xl border px-3 py-2 ${
+                        p.id === activePacketId ? "bg-white text-black" : "bg-transparent text-white/90 border-white/20"
                       }`}
                     >
-                      <div className="flex gap-2">
-                        <img src={p.snapshotJpeg} alt="Snapshot" className="h-14 w-24 object-cover rounded-lg border border-white/10" />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="text-sm font-semibold text-white truncate">Aanwijzing</div>
-                            {!p.seen ? (
-                              <span className="text-xs rounded-full bg-blue-500/20 text-blue-200 px-2 py-0.5">nieuw</span>
-                            ) : null}
-                          </div>
-                          <div className="text-xs text-white/60 mt-0.5">{new Date(p.createdAt).toLocaleString()}</div>
-                          <div className="text-xs text-white/60 mt-0.5">Markeringen: {p.shapes.length}</div>
-                        </div>
+                      <div className="text-xs opacity-80">
+                        {new Date(p.createdAt).toLocaleTimeString()}
+                        {!p.seen ? " • nieuw" : ""}
                       </div>
+                      <div className="text-sm font-medium">Snapshot</div>
                     </button>
                   ))}
+                  {packets.length === 0 ? <div className="text-xs opacity-70">Nog geen snapshots.</div> : null}
+                </div>
               </div>
-            )}
-          </div>
-        </div>
-      }
-    >
-      <ViewerStage>
-        <div className="absolute inset-0">
-          {active ? (
-            <div ref={snapshotWrapRef} className="absolute inset-0" style={{ position: "relative" }}>
-              <img src={active.snapshotJpeg} alt="Snapshot" className="w-full h-full object-contain block" />
-              <canvas ref={snapshotCanvasRef} className="absolute inset-0" style={{ pointerEvents: "none" }} />
 
-              <div className="absolute top-3 left-3 flex flex-wrap gap-2">
-                <Button onClick={() => setActivePacketId(null)}>Terug naar live</Button>
-                <Button onClick={clearAll}>Wis alles</Button>
+              <div ref={snapshotWrapRef} className="rounded-xl bg-white/10 p-3">
+                <div className="text-white text-xs opacity-80 mb-2">Snapshot viewer</div>
+                <canvas ref={snapshotCanvasRef} className="w-full rounded-lg bg-black/40" />
               </div>
             </div>
-          ) : showPreview ? (
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="absolute inset-0 w-full h-full object-contain"
-              style={{ imageRendering: "auto" }}
-            />
-          ) : (
-            <div className="absolute inset-0 flex items-center justify-center text-white/70">
-              <div className="max-w-[560px] text-center px-6">
-                <div className="text-xl font-semibold text-white mb-2">Scherm delen is actief</div>
-                <div className="text-white/70">
-                  Om “scherm-in-scherm” te voorkomen tonen we hier standaard geen live preview.
-                  <br />
-                  Het kind ziet je scherm wél.
-                </div>
-                <div className="mt-4">
-                  <Button onClick={() => setShowPreview(true)}>Preview aan (kan loop geven)</Button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </ViewerStage>
+          }
+        />
+      </div>
     </FullscreenShell>
   );
 }
