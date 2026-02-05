@@ -543,18 +543,43 @@ export default function ShareClient({ code }: { code: string }) {
       {/* ====== Telefoon overlay 2 ====== */}
       {camOpen ? (
         <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4">
-          <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-lg font-semibold">Telefoon als extra camera</div>
-                <div className="text-sm text-slate-600 mt-1">
-                  {camLive
-                    ? "Live beeld is actief. Je ziet hier wat het kind ziet."
-                    : "Scan de QR-code met je telefoon en start daar de camera."}
+          <div className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="p-6 flex items-start justify-between gap-4">
+              <div className="flex items-start gap-4">
+                <div className="h-12 w-12 rounded-2xl bg-slate-100 flex items-center justify-center border border-slate-200">
+                  <svg
+                    width="22"
+                    height="22"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="text-slate-700"
+                  >
+                    <path
+                      d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    />
+                    <path
+                      d="M19.4 15a7.97 7.97 0 0 0 .1-1 7.97 7.97 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a8.2 8.2 0 0 0-1.7-1L15 3h-6l-.3 3a8.2 8.2 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.97 7.97 0 0 0-.1 1c0 .34.03.67.1 1l-2 1.6 2 3.4 2.4-1c.53.43 1.1.77 1.7 1l.3 3h6l.3-3c.6-.23 1.17-.57 1.7-1l2.4 1 2-3.4-2-1.6Z"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </div>
+
+                <div>
+                  <div className="text-2xl font-semibold">Telefoon Koppelen met QR Code</div>
+                  <div className="text-sm text-slate-600 mt-1">
+                    Volg de stappen om je camera te verbinden.
+                  </div>
                 </div>
               </div>
+
               <button
-                className="h-10 w-10 rounded-xl border bg-white hover:bg-slate-50"
+                className="h-10 w-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 flex items-center justify-center"
                 onClick={() => setCamOpen(false)}
                 aria-label="Sluiten"
               >
@@ -562,14 +587,118 @@ export default function ShareClient({ code }: { code: string }) {
               </button>
             </div>
 
-            {camLive ? (
-              <div className="mt-4 rounded-2xl border bg-slate-50 p-3">
-                <div className="text-xs text-slate-600 mb-2 flex items-center justify-between">
-                  <span>
-                    Live preview{" "}
-                    {camPreviewAt ? (
-                      <span className="text-slate-400">• {new Date(camPreviewAt).toLocaleTimeString()}</span>
-                    ) : null}
+            {/* Body */}
+            <div className="border-t border-slate-200">
+              <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Left: QR */}
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="aspect-square w-full flex items-center justify-center">
+                      {camLoading || !camLink ? (
+                        <div className="text-sm text-slate-500">QR-code wordt gemaakt…</div>
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={qrUrl(camLink)}
+                          alt="QR code"
+                          className="w-full h-auto rounded-xl"
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 text-center text-blue-900 font-semibold text-lg leading-snug">
+                    Richt de camera van je telefoon op deze afbeelding
+                  </div>
+                </div>
+
+                {/* Right: steps + refresh */}
+                <div className="flex flex-col">
+                  <div className="text-sm font-semibold tracking-wide text-slate-400">STAPPENPLAN</div>
+
+                  <div className="mt-4 space-y-4">
+                    <div className="flex items-start gap-4">
+                      <div className="h-9 w-9 rounded-full bg-blue-700 text-white flex items-center justify-center font-semibold">
+                        1
+                      </div>
+                      <div className="text-base text-slate-800">
+                        Open de <span className="font-semibold">camera-app</span> op je telefoon.
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-4">
+                      <div className="h-9 w-9 rounded-full bg-blue-700 text-white flex items-center justify-center font-semibold">
+                        2
+                      </div>
+                      <div className="text-base text-slate-800">
+                        Houd de telefoon voor het <span className="font-semibold">scherm</span>.
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-4">
+                      <div className="h-9 w-9 rounded-full bg-blue-700 text-white flex items-center justify-center font-semibold">
+                        3
+                      </div>
+                      <div className="text-base text-slate-800">
+                        Tik op de <span className="font-semibold">link</span> die in beeld komt.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-6">
+                    <Button
+                      variant="secondary"
+                      className="w-full h-12 text-base rounded-xl"
+                      onClick={() => void createPhoneCameraLink()}
+                      disabled={camLoading}
+                    >
+                      ⟳&nbsp; Nieuwe QR-code
+                    </Button>
+                  </div>
+
+                  {camError ? <div className="mt-3 text-sm text-red-600">{camError}</div> : null}
+
+                  {/* Optional preview (keeps functionality, but doesn’t change the main layout) */}
+                  {camPreviewJpeg ? (
+                    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="text-xs text-slate-600 mb-2 flex items-center justify-between">
+                        <span>
+                          Preview{" "}
+                          {camPreviewAt ? (
+                            <span className="text-slate-400">
+                              • {new Date(camPreviewAt).toLocaleTimeString()}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="text-slate-500">{camLive ? "Live" : "Wachten…"}</span>
+                      </div>
+                      <div className="aspect-video w-full overflow-hidden rounded-xl bg-black flex items-center justify-center">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={camPreviewJpeg} alt="preview" className="w-full h-full object-contain" />
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer status */}
+            <div className="border-t border-slate-200 px-6 py-4 flex items-center gap-2 text-sm">
+              <span className="h-2.5 w-2.5 rounded-full bg-blue-600" />
+              <span className="text-slate-600">Status:</span>
+              <span className="font-semibold">
+                {camError
+                  ? "Fout"
+                  : camLive
+                  ? "Verbonden"
+                  : camLoading || !camLink
+                  ? "QR-code maken…"
+                  : "Aan het verbinden…"}
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : null}}
                   </span>
                   <span className="text-slate-400">portrait</span>
                 </div>
@@ -618,7 +747,23 @@ export default function ShareClient({ code }: { code: string }) {
                   </div>
 
                   <div className="rounded-xl border p-3">
-                    <div className="flex items-center justify-end">
+                    <div className="text-sm font-medium">Koppellink</div>
+
+                    <div className="mt-2 break-all text-xs text-slate-700">
+                      {camLoading || !camLink ? "Link wordt gemaakt…" : camLink}
+                    </div>
+
+                    <div className="mt-3 flex gap-2">
+                      <Button
+                        onClick={() => {
+                          if (camLink) void copy(camLink);
+                        }}
+                        className="flex-1"
+                        disabled={camLoading || !camLink}
+                      >
+                        Kopieer link
+                      </Button>
+
                       <Button
                         onClick={() => {
                           setCamError("");
@@ -631,9 +776,7 @@ export default function ShareClient({ code }: { code: string }) {
                       </Button>
                     </div>
 
-                    <div className="mt-3 text-xs text-slate-500">
-                      Tip: open de link op de telefoon en kies “Sta camera toe”.
-                    </div>
+                    <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
                     <div className="mt-3 text-xs text-slate-500 text-right">Link verloopt na ±30 minuten.</div>
                   </div>
                 </div>
