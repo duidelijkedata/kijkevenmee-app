@@ -13,7 +13,7 @@ function uniq(ids: string[]) {
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
 
-  const requester_name = typeof body?.requester_name === "string" ? body.requester_name : null;
+  let requester_name = typeof body?.requester_name === "string" ? body.requester_name : null;
   const requester_note = typeof body?.requester_note === "string" ? body.requester_note : null;
 
   // Client mag helper_id meegeven (bijv. dropdown). Anders proberen we server-side auto-assign.
@@ -22,12 +22,26 @@ export async function POST(req: Request) {
   let auto_assigned = false;
   let assign_reason: string | null = null;
 
+  // ✅ NEW: als ouder ingelogd is en requester_name leeg is -> pak display_name uit profiel
   try {
-    if (!helper_id) {
-      const supabase = await supabaseServer();
-      const { data } = await supabase.auth.getUser();
-      const user = data.user;
+    const supabase = await supabaseServer();
+    const { data } = await supabase.auth.getUser();
+    const user = data.user;
 
+    if (user && (!requester_name || !String(requester_name).trim())) {
+      const admin = supabaseAdmin();
+      const { data: prof } = await admin
+        .from("profiles")
+        .select("display_name")
+        .eq("id", user.id)
+        .maybeSingle<{ display_name: string | null }>();
+
+      const dn = String(prof?.display_name ?? "").trim();
+      if (dn) requester_name = dn;
+    }
+
+    // auto-assign blijft zoals eerder
+    if (!helper_id) {
       if (user) {
         const { data: rels, error: relErr } = await supabase
           .from("helper_relationships")
@@ -98,7 +112,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 400 });
   }
 
-  // ✅ NEW: als deze sessie aan een kind is toegewezen, sluit dan oude open sessies voor datzelfde kind
+  // ✅ sluit oude open sessies voor dit kind (zodat kind alleen laatste ziet)
   if (session?.helper_id) {
     await admin
       .from("sessions")
@@ -108,7 +122,7 @@ export async function POST(req: Request) {
       .neq("id", session.id);
   }
 
-  // ✅ Server bepaalt of een code vereist is (default true = veilig)
+  // server bepaalt of code vereist is (default true)
   let requires_code = true;
   if (session?.helper_id) {
     const { data: prof } = await admin
@@ -127,4 +141,3 @@ export async function POST(req: Request) {
     requires_code,
   });
 }
-

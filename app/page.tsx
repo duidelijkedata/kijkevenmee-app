@@ -18,11 +18,6 @@ type RelatedUser = {
   use_koppelcode?: boolean | null;
 };
 
-type RelationshipRow = {
-  helper_id: string | null;
-  child_id: string | null;
-};
-
 export default function OuderStart() {
   const router = useRouter();
   const supabase = useMemo(() => supabaseBrowser(), []);
@@ -35,68 +30,47 @@ export default function OuderStart() {
   const [linkedChildren, setLinkedChildren] = useState<LinkedChild[]>([]);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
 
-  // ✅ debug: login status
-  const [parentUserId, setParentUserId] = useState<string | null>(null);
-  const [relatedUsersStatus, setRelatedUsersStatus] = useState<"idle" | "ok" | "unauth" | "error">("idle");
-
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getUser();
       const uid = data?.user?.id ?? null;
-      setParentUserId(uid);
       if (!uid) return;
 
-      const { data: rels, error: relErr } = await supabase
+      const { data: rels } = await supabase
         .from("helper_relationships")
         .select("child_id, helper_id")
         .or(`helper_id.eq.${uid},child_id.eq.${uid}`);
 
-      if (relErr) return;
+      const ids = new Set<string>();
+      for (const r of rels ?? []) {
+        const childId = (r as any).child_id as string | null;
+        const helperId = (r as any).helper_id as string | null;
 
-      const relatedIds = new Set<string>();
-      for (const r of (rels ?? []) as RelationshipRow[]) {
-        const helperId = r.helper_id ?? null;
-        const childId = r.child_id ?? null;
-        if (helperId === uid && childId) relatedIds.add(childId);
-        if (childId === uid && helperId) relatedIds.add(helperId);
+        if (helperId === uid && childId) ids.add(childId);
+        if (childId === uid && helperId) ids.add(helperId);
       }
 
-      const ids = Array.from(relatedIds).filter(Boolean);
-      if (!ids.length) {
-        setLinkedChildren([]);
-        setSelectedChildId(null);
-        return;
-      }
+      const wanted = Array.from(ids);
+      if (!wanted.length) return;
 
-      const resp = await fetch("/api/related-users", {
+      const r = await fetch("/api/related-users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids }),
+        body: JSON.stringify({ ids: wanted }),
       });
 
-      if (resp.status === 401) {
-        setRelatedUsersStatus("unauth");
-        return;
-      }
-
-      const j = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        setRelatedUsersStatus("error");
-        return;
-      }
-
-      setRelatedUsersStatus("ok");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return;
 
       const users: RelatedUser[] = Array.isArray(j?.users) ? (j.users as RelatedUser[]) : [];
       const byId = new Map<string, RelatedUser>(users.map((u) => [u.id, u]));
 
-      const mapped: LinkedChild[] = ids
+      const mapped: LinkedChild[] = wanted
         .map((id) => {
           const u = byId.get(id);
           if (!u) return null;
 
           const label = String(u.display_name ?? "").trim() || `Kind ${String(id).slice(0, 8)}…`;
-
           return {
             id,
             label,
@@ -117,15 +91,7 @@ export default function OuderStart() {
     setLoading(true);
     setCreated(null);
 
-    const shouldAssignToChild = Boolean(selectedChild && selectedChild.use_koppelcode === false);
-
-    // ✅ debug in console: zie je dit in DevTools?
-    console.log("[ouder/start]", {
-      parentUserId,
-      selectedChildId,
-      selectedChild,
-      shouldAssignToChild,
-    });
+    const shouldAssignToChild = Boolean(selectedChild && !selectedChild.use_koppelcode);
 
     const res = await fetch("/api/sessions/create-parent", {
       method: "POST",
@@ -142,10 +108,16 @@ export default function OuderStart() {
 
     if (!res.ok || json?.error) return alert(json?.error ?? "Onbekende fout");
 
-    const code = String(json?.session?.code || "").trim();
+    const session = json?.session as { code?: string; helper_id?: string | null } | undefined;
+    const code = String(session?.code || "").trim();
     if (!code) return alert("Sessie is gemaakt maar code ontbreekt.");
 
-    if (shouldAssignToChild) {
+    const autoAssigned = Boolean(json?.auto_assigned);
+    const helperId = session?.helper_id ?? null;
+
+    // ✅ Belangrijk: als server auto-assigned heeft gedaan, of als we client-side assigned hebben:
+    // direct door naar schermdelen, en dus GEEN code scherm tonen.
+    if ((shouldAssignToChild || autoAssigned) && helperId) {
       router.push(`/ouder/share/${code}`);
       return;
     }
@@ -161,11 +133,6 @@ export default function OuderStart() {
         `Meekijken code: ${created.code.slice(0, 3)} ${created.code.slice(3)}\n\nKind opent: ${kidUrl}\n\nOuder scherm delen: ${shareUrl}`
       )
     : "";
-
-  const debugLine =
-    parentUserId
-      ? `Ingelogd (uid: ${parentUserId.slice(0, 8)}…), linkedChildren: ${linkedChildren.length}, related-users: ${relatedUsersStatus}`
-      : `NIET ingelogd → "zonder code" kan niet werken, dus altijd code`;
 
   return (
     <main className="mx-auto max-w-2xl space-y-6">
@@ -201,9 +168,6 @@ export default function OuderStart() {
       {!created ? (
         <Card>
           <div className="space-y-3">
-            {/* mini debug */}
-            <p className="text-xs text-slate-500">{debugLine}</p>
-
             {linkedChildren.length ? (
               <div>
                 <label className="block text-sm font-medium text-slate-700">Kies je kind</label>
