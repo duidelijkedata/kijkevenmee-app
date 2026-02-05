@@ -540,7 +540,7 @@ export default function ShareClient({ code }: { code: string }) {
 
   return (
     <FullscreenShell sidebar={null}>
-      {/* ====== Telefoon overlay ====== */}
+      {/* ====== Telefoon overlay 2 ====== */}
       {camOpen ? (
         <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4">
           <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-xl">
