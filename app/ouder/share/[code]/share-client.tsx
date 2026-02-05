@@ -394,14 +394,19 @@ export default function ShareClient({ code }: { code: string }) {
 
               <div className="flex gap-2">
                 <Button
-                  size="sm"
+                  className="h-10 px-3 text-sm"
                   variant="primary"
                   onClick={() => void startShare()}
                   disabled={status === "sharing" || status === "connected"}
                 >
                   Start delen
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => void stopShare()} disabled={status === "idle"}>
+                <Button
+                  className="h-10 px-3 text-sm"
+                  variant="secondary"
+                  onClick={() => void stopShare()}
+                  disabled={status === "idle"}
+                >
                   Stop
                 </Button>
               </div>
@@ -443,7 +448,12 @@ export default function ShareClient({ code }: { code: string }) {
               </div>
 
               <div className="flex gap-2">
-                <Button size="sm" variant="primary" onClick={() => void openPhoneOverlay()} disabled={camLoading}>
+                <Button
+                  className="h-10 px-3 text-sm"
+                  variant="primary"
+                  onClick={() => void openPhoneOverlay()}
+                  disabled={camLoading}
+                >
                   Koppel telefoon
                 </Button>
               </div>
@@ -527,7 +537,11 @@ export default function ShareClient({ code }: { code: string }) {
                   >
                     <div className="flex items-center justify-between pb-2">
                       <div className="text-white text-sm font-semibold">Aantekening</div>
-                      <Button size="sm" variant="ghost" onClick={() => setSnapshotModalOpen(false)}>
+                      <Button
+                        className="h-10 px-3 text-sm"
+                        variant="secondary"
+                        onClick={() => setSnapshotModalOpen(false)}
+                      >
                         Sluiten (ESC)
                       </Button>
                     </div>
@@ -550,7 +564,11 @@ export default function ShareClient({ code }: { code: string }) {
                   >
                     <div className="flex items-center justify-between">
                       <div className="text-white text-sm font-semibold">Telefoon koppelen</div>
-                      <Button size="sm" variant="ghost" onClick={() => setCamOpen(false)}>
+                      <Button
+                        className="h-10 px-3 text-sm"
+                        variant="secondary"
+                        onClick={() => setCamOpen(false)}
+                      >
                         Sluiten
                       </Button>
                     </div>
@@ -561,7 +579,9 @@ export default function ShareClient({ code }: { code: string }) {
                       ) : (
                         <>
                           <div className="text-xs opacity-80">Open deze link op je telefoon (of scan QR):</div>
-                          <div className="mt-2 rounded-xl bg-white/10 p-2 text-xs break-all">{camLink || ensureCamLink()}</div>
+                          <div className="mt-2 rounded-xl bg-white/10 p-2 text-xs break-all">
+                            {camLink || ensureCamLink()}
+                          </div>
                         </>
                       )}
                     </div>
