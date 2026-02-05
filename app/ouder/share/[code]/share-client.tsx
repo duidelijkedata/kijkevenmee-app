@@ -324,9 +324,9 @@ export default function ShareClient({ code }: { code: string }) {
   // ===== UI =====
   const showPhoneLive = phoneIsLiveNow();
 
-  return (
-    <FullscreenShell>
-      <div className="h-full w-full flex">
+ return (
+  <FullscreenShell sidebar={<div />}>
+    <div className="h-full w-full flex">
         {/* Main viewer */}
         <div className="flex-1 min-w-0 relative">
           <ViewerStage>
