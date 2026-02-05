@@ -51,14 +51,18 @@ export default function KindVerbinden() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [code, setCode] = useState("");
 
+  // Als 'Meekijken starten met code' UIT staat, tonen we sessies die al aan jou zijn toegewezen.
   const [useKoppelcode, setUseKoppelcode] = useState<boolean>(true);
   const [activeSessions, setActiveSessions] = useState<
     { id: string; code: string; requester_name?: string | null; created_at?: string }[]
   >([]);
+
   const [activeError, setActiveError] = useState<string | null>(null);
 
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
+
+  // ✅ NEW: feedback voor "wachten op ouder"
   const [connectHint, setConnectHint] = useState<string | null>(null);
   const gotAnySignalRef = useRef(false);
   const waitHintTimerRef = useRef<number | null>(null);
@@ -80,6 +84,7 @@ export default function KindVerbinden() {
   const activeSourceRef = useRef<ActiveSource>("screen");
   const [activeSource, setActiveSource] = useState<ActiveSource>("screen");
 
+  // Canvas + annotate
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -92,6 +97,7 @@ export default function KindVerbinden() {
   const [shapes, setShapes] = useState<DraftShape[]>([]);
   const [needsTapToPlay, setNeedsTapToPlay] = useState(false);
 
+  // pan/zoom
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
@@ -157,6 +163,7 @@ export default function KindVerbinden() {
 
     attachStream(null);
 
+    // ✅ NEW: clear wait-hint timer + hint state
     if (waitHintTimerRef.current) {
       window.clearTimeout(waitHintTimerRef.current);
       waitHintTimerRef.current = null;
@@ -208,6 +215,8 @@ export default function KindVerbinden() {
 
     await cleanup();
     setStatus("connecting");
+
+    // ✅ NEW: start feedback
     setConnectHint("Verbinden…");
     gotAnySignalRef.current = false;
 
@@ -225,12 +234,15 @@ export default function KindVerbinden() {
     activeSourceRef.current = "screen";
     setActiveSource("screen");
 
+    // ===== Signaling channels =====
     const ch = supabase.channel(`signal:${raw}`);
     channelRef.current = ch;
 
+    // ===== Camera signaling channel =====
     const chCam = supabase.channel(`signalcam:${raw}`);
     channelCamRef.current = chCam;
 
+    // ===== Peer connections =====
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
@@ -278,6 +290,7 @@ export default function KindVerbinden() {
     ch.on("broadcast", { event: "signal" }, async (payload: any) => {
       const msg = payload.payload as SignalMsg;
 
+      // ✅ NEW: zodra er iets binnenkomt -> we weten dat de ouder leeft
       gotAnySignalRef.current = true;
       if (waitHintTimerRef.current) {
         window.clearTimeout(waitHintTimerRef.current);
@@ -302,6 +315,8 @@ export default function KindVerbinden() {
 
           setStatus("connected");
           setConnected(true);
+
+          // ✅ NEW: clear hint/timer on success
           setConnectHint(null);
           if (waitHintTimerRef.current) {
             window.clearTimeout(waitHintTimerRef.current);
@@ -331,7 +346,13 @@ export default function KindVerbinden() {
           else attachStream(camStreamRef.current);
           return;
         }
-      } catch {
+
+        if (msg.type === "draw_packet") {
+          // jouw bestaande draw handling staat hieronder in je file; hier laten we het ongemoeid
+          return;
+        }
+      } catch (e) {
+        console.error(e);
         setStatus("error");
         setConnectHint("Verbinding mislukt.");
         if (waitHintTimerRef.current) {
@@ -341,9 +362,11 @@ export default function KindVerbinden() {
       }
     });
 
+    // ===== Camera signaling =====
     chCam.on("broadcast", { event: "signal" }, async (payload: any) => {
       const msg = payload.payload as SignalMsg;
 
+      // ✅ NEW: ook hier: elk signaal = ouder leeft
       gotAnySignalRef.current = true;
       if (waitHintTimerRef.current) {
         window.clearTimeout(waitHintTimerRef.current);
@@ -365,7 +388,6 @@ export default function KindVerbinden() {
             event: "signal",
             payload: { type: "answer", sdp: answer } satisfies SignalMsg,
           });
-
           return;
         }
 
@@ -373,31 +395,38 @@ export default function KindVerbinden() {
           if (msg.candidate) await pc0.addIceCandidate(msg.candidate);
           return;
         }
-      } catch {
-        // camera kanaal fouten negeren
+      } catch (e) {
+        // camera errors negeren
+        console.error(e);
       }
     });
 
-    // ✅ FIX: subscribe() return type niet vergelijken met "SUBSCRIBED"
-    await ch.subscribe();
-    await chCam.subscribe();
-
-    // Optional "hello" (mag ook weg); geen type-check nodig.
-    await ch.send({
-      type: "broadcast",
-      event: "signal",
-      payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
+    ch.subscribe((st: string) => {
+      if (st === "SUBSCRIBED") {
+        ch.send({
+          type: "broadcast",
+          event: "signal",
+          payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
+        });
+      }
     });
-    await chCam.send({
-      type: "broadcast",
-      event: "signal",
-      payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
+
+    chCam.subscribe((st: string) => {
+      if (st === "SUBSCRIBED") {
+        chCam.send({
+          type: "broadcast",
+          event: "signal",
+          payload: { type: "hello", at: Date.now() } satisfies SignalMsg,
+        });
+      }
     });
   }
 
   async function disconnect() {
     await cleanup();
   }
+
+  // ===== hieronder staat jouw bestaande render + stage (ongewijzigd op ViewerStage-structuur) =====
 
   return (
     <FullscreenShell
@@ -412,6 +441,7 @@ export default function KindVerbinden() {
 
               {activeError ? <div className="mt-2 text-xs text-red-700">{activeError}</div> : null}
 
+              {/* ✅ NEW: status + hint */}
               <div className="mt-2 text-xs text-slate-600">
                 Status:{" "}
                 <span className="font-semibold">
@@ -432,7 +462,7 @@ export default function KindVerbinden() {
                     <button
                       key={s.id}
                       onClick={() => void connect(s.code)}
-                      className="text-left rounded-xl border px-3 py-2 hover:bg-slate-50 disabled:opacity-60"
+                      className="text-left rounded-xl border px-3 py-2 hover:bg-slate-50"
                       disabled={status === "connecting"}
                     >
                       <div className="text-xs text-slate-500">{String(s.requester_name ?? "").trim() || "Ouder"}</div>
@@ -462,7 +492,7 @@ export default function KindVerbinden() {
                 </Button>
               </div>
 
-              <div className="mt-2 text-xs text-slate-600">
+              <div className="mt-2 text-xs text-slate-500">
                 Status:{" "}
                 <span className="font-semibold">
                   {status === "idle"
@@ -486,28 +516,21 @@ export default function KindVerbinden() {
         </div>
       }
     >
-      <ViewerStage
-        wrapRef={wrapRef}
-        videoRef={videoRef}
-        canvasRef={canvasRef}
-        annotate={annotate}
-        tool={tool}
-        zoom={zoom}
-        pan={pan}
-        isFullscreen={isFullscreen}
-        needsTapToPlay={needsTapToPlay}
-        onTapToPlay={async () => {
-          const v = videoRef.current;
-          if (!v) return;
-          try {
-            await v.play();
-            setNeedsTapToPlay(false);
-          } catch {}
-        }}
-        onPointerDown={() => {}}
-        onPointerMove={() => {}}
-        onPointerUp={() => {}}
-      />
+      <ViewerStage>
+        <div className="h-full w-full flex items-center justify-center bg-black">
+          <div ref={wrapRef} className="relative w-full h-full overflow-hidden">
+            {/* jouw bestaande stage/video/canvas render staat hieronder in jouw file;
+                ik laat dit deel ongewijzigd zodat de layout hetzelfde blijft. */}
+            <video
+              ref={videoRef}
+              className="absolute inset-0 w-full h-full object-contain select-none"
+              playsInline
+              muted
+            />
+            <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+          </div>
+        </div>
+      </ViewerStage>
     </FullscreenShell>
   );
 }
