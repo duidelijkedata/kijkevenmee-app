@@ -672,7 +672,7 @@ export default function ShareClient({ code }: { code: string }) {
         </div>
       ) : null}
 
-      {/* ====== NEW DASHBOARD LOOK ====== */}
+      {/* ====== NEW DASHBOARD LOOKs ====== */}
       <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col">
         {/* Header */}
         <header className="h-20 border-b border-slate-200 bg-white flex items-center justify-between px-6 lg:px-8 sticky top-0 z-50">
