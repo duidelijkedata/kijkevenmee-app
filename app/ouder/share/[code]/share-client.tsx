@@ -610,31 +610,9 @@ export default function ShareClient({ code }: { code: string }) {
                         <div className="text-sm text-slate-500">QR wordt gemaakt…</div>
                       </div>
                     ) : (
-                      <>
-                        <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
-                        <div className="text-xs text-slate-500 mt-2">Scan met iPhone/Android camera app of QR scanner.</div>
-                      </>
-                    )}
-                  </div>
 
                   <div className="rounded-xl border p-3">
-                    <div className="text-sm font-medium">Koppellink</div>
-
-                    <div className="mt-2 break-all text-xs text-slate-700">
-                      {camLoading || !camLink ? "Link wordt gemaakt…" : camLink}
-                    </div>
-
-                    <div className="mt-3 flex gap-2">
-                      <Button
-                        onClick={() => {
-                          if (camLink) void copy(camLink);
-                        }}
-                        className="flex-1"
-                        disabled={camLoading || !camLink}
-                      >
-                        Kopieer link
-                      </Button>
-
+                    <div className="flex items-center justify-end">
                       <Button
                         onClick={() => {
                           setCamError("");
@@ -647,22 +625,13 @@ export default function ShareClient({ code }: { code: string }) {
                       </Button>
                     </div>
 
-                    <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
-                    <div className="mt-3 text-xs text-slate-500 text-right">Link verloopt na ±30 minuten.</div>
+                    <div className="mt-3 text-xs text-slate-500">
+                      Tip: open de link op de telefoon en kies “Sta camera toe”.
+                    </div>
+                    <div className="mt-3 text-xs text-slate-500 text-right">
+                      Link verloopt na ±30 minuten.
+                    </div>
                   </div>
-                </div>
-
-                <div className="mt-4 text-xs text-slate-500">
-                  Kind ziet nu:{" "}
-                  <span className="font-semibold">
-                    {activeSource === "screen" ? "Scherm" : activeSource === "camera" ? "Telefoon" : "Niets"}
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      ) : null}
 
       {/* ====== Snapshot modal ====== */}
       {snapshotModalOpen && activePacketId ? (
