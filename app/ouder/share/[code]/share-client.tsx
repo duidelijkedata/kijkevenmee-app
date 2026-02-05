@@ -132,7 +132,6 @@ export default function ShareClient({ code }: { code: string }) {
 
   // overlay is live zodra we echt frames ontvangen
   const [camLive, setCamLive] = useState<boolean>(false);
-  const phoneIsLive = camLive;
 
   // helper: "telefoon is *nu* live" (dus geen QR nodig)
   function phoneIsLiveNow() {
@@ -160,6 +159,9 @@ export default function ShareClient({ code }: { code: string }) {
   }
 
   async function createPhoneCameraLink() {
+    // ✅ voorkom dubbel klikken / dubbele request
+    if (camLoading) return;
+
     setCamLoading(true);
     setCamError("");
     setCamLink("");
@@ -187,6 +189,36 @@ export default function ShareClient({ code }: { code: string }) {
     try {
       await navigator.clipboard.writeText(text);
     } catch {}
+  }
+
+  // ✅ NEW: open overlay direct in “QR screen” (geen tussenstap)
+  async function openExtraCameraOverlay() {
+    const liveNow = phoneIsLiveNow();
+
+    // reset UI alleen als niet live
+    if (!liveNow) {
+      setCamLive(false);
+      setCamPreviewJpeg("");
+      setCamPreviewAt(0);
+      setCamError("");
+      setCamLink("");
+      setCamLoading(false);
+    } else {
+      setCamError("");
+    }
+
+    setCamOpen(true);
+
+    // active source (kind)
+    if (liveNow) {
+      await broadcastActiveSource("camera");
+      return;
+    } else {
+      await broadcastActiveSource("screen");
+    }
+
+    // ✅ direct link genereren zodat je meteen naar “afbeelding 2” gaat
+    await createPhoneCameraLink();
   }
 
   // ===== Signaling =====
@@ -479,7 +511,6 @@ export default function ShareClient({ code }: { code: string }) {
     img.src = packet.snapshotJpeg;
   }
 
-  // ===== Snapshot modal rendering =====
   useEffect(() => {
     if (!activePacketId) return;
     const p = packets.find((x) => x.id === activePacketId);
@@ -517,7 +548,9 @@ export default function ShareClient({ code }: { code: string }) {
               <div>
                 <div className="text-lg font-semibold">Telefoon als extra camera</div>
                 <div className="text-sm text-slate-600 mt-1">
-                  {phoneIsLive ? "Live beeld is actief. Je ziet hier wat het kind ziet." : "Scan de QR-code met je telefoon en start daar de camera."}
+                  {camLive
+                    ? "Live beeld is actief. Je ziet hier wat het kind ziet."
+                    : "Scan de QR-code met je telefoon en start daar de camera."}
                 </div>
               </div>
               <button
@@ -529,12 +562,14 @@ export default function ShareClient({ code }: { code: string }) {
               </button>
             </div>
 
-            {phoneIsLive ? (
+            {camLive ? (
               <div className="mt-4 rounded-2xl border bg-slate-50 p-3">
                 <div className="text-xs text-slate-600 mb-2 flex items-center justify-between">
                   <span>
                     Live preview{" "}
-                    {camPreviewAt ? <span className="text-slate-400">• {new Date(camPreviewAt).toLocaleTimeString()}</span> : null}
+                    {camPreviewAt ? (
+                      <span className="text-slate-400">• {new Date(camPreviewAt).toLocaleTimeString()}</span>
+                    ) : null}
                   </span>
                   <span className="text-slate-400">portrait</span>
                 </div>
@@ -563,62 +598,65 @@ export default function ShareClient({ code }: { code: string }) {
               </div>
             ) : (
               <>
-                <div className="mt-4">
-                  {!camLink ? (
-                    <div className="flex items-center justify-between gap-3">
-                      <Button variant="primary" onClick={createPhoneCameraLink} disabled={camLoading}>
-                        {camLoading ? "Link maken…" : "Maak QR / link"}
-                      </Button>
-                      <div className="text-xs text-slate-500">Link verloopt na ±30 minuten.</div>
-                    </div>
-                  ) : null}
+                {/* ✅ altijd dezelfde “QR/link” lay-out; tijdens laden tonen we skeleton */}
+                {camError ? (
+                  <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{camError}</div>
+                ) : null}
 
-                  {camError ? (
-                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{camError}</div>
-                  ) : null}
-
-                  {camLink ? (
-                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-                      <div className="rounded-xl border bg-slate-50 p-3">
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+                  <div className="rounded-xl border bg-slate-50 p-3">
+                    {camLoading || !camLink ? (
+                      <div className="w-full aspect-square rounded-lg bg-white flex items-center justify-center">
+                        <div className="text-sm text-slate-500">QR wordt gemaakt…</div>
+                      </div>
+                    ) : (
+                      <>
                         <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
                         <div className="text-xs text-slate-500 mt-2">Scan met iPhone/Android camera app of QR scanner.</div>
-                      </div>
-
-                      <div className="rounded-xl border p-3">
-                        <div className="text-sm font-medium">Koppellink</div>
-                        <div className="mt-2 break-all text-xs text-slate-700">{camLink}</div>
-                        <div className="mt-3 flex gap-2">
-                          <Button onClick={() => copy(camLink)} className="flex-1">
-                            Kopieer link
-                          </Button>
-                          <Button
-                            onClick={() => {
-                              setCamLink("");
-                              setCamError("");
-                            }}
-                            className="w-28"
-                          >
-                            Vernieuw
-                          </Button>
-                        </div>
-                        <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="mt-4 text-xs text-slate-500">
-                    Kind ziet nu:{" "}
-                    <span className="font-semibold">
-                      {activeSource === "screen"
-                        ? "Scherm"
-                        : (activeSource as string) === "camera"
-                          ? "Telefoon"
-                          : "Niets"}
-                    </span>
-                    {(activeSource as string) === "camera" ? (
-                      <span className="text-slate-400"> (wacht op “Start camera” op telefoon)</span>
-                    ) : null}
+                      </>
+                    )}
                   </div>
+
+                  <div className="rounded-xl border p-3">
+                    <div className="text-sm font-medium">Koppellink</div>
+
+                    <div className="mt-2 break-all text-xs text-slate-700">
+                      {camLoading || !camLink ? "Link wordt gemaakt…" : camLink}
+                    </div>
+
+                    <div className="mt-3 flex gap-2">
+                      <Button
+                        onClick={() => {
+                          if (camLink) void copy(camLink);
+                        }}
+                        className="flex-1"
+                        disabled={camLoading || !camLink}
+                      >
+                        Kopieer link
+                      </Button>
+
+                      <Button
+                        onClick={() => {
+                          setCamError("");
+                          void createPhoneCameraLink();
+                        }}
+                        className="w-28"
+                        disabled={camLoading}
+                      >
+                        Vernieuw
+                      </Button>
+                    </div>
+
+                    <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
+                    <div className="mt-3 text-xs text-slate-500 text-right">Link verloopt na ±30 minuten.</div>
+                  </div>
+                </div>
+
+                <div className="mt-4 text-xs text-slate-500">
+                  Kind ziet nu:{" "}
+                  <span className="font-semibold">
+                    {activeSource === "screen" ? "Scherm" : activeSource === "camera" ? "Telefoon" : "Niets"}
+                  </span>
                 </div>
               </>
             )}
@@ -722,28 +760,7 @@ export default function ShareClient({ code }: { code: string }) {
                 </div>
 
                 <button
-                  onClick={async () => {
-                    const liveNow = phoneIsLiveNow();
-
-                    if (!liveNow) {
-                      setCamLive(false);
-                      setCamPreviewJpeg("");
-                      setCamPreviewAt(0);
-                      setCamError("");
-                      setCamLink("");
-                      setCamLoading(false);
-                    } else {
-                      setCamError("");
-                    }
-
-                    setCamOpen(true);
-
-                    if (liveNow) {
-                      await broadcastActiveSource("camera");
-                    } else {
-                      await broadcastActiveSource("screen");
-                    }
-                  }}
+                  onClick={() => void openExtraCameraOverlay()}
                   className="w-full mt-6 flex items-center justify-center gap-2 p-4 border-2 border-dashed border-slate-200 text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-all rounded-2xl text-sm font-semibold"
                 >
                   <span className="text-lg">📷</span>
@@ -806,6 +823,7 @@ export default function ShareClient({ code }: { code: string }) {
                             setQuality(q);
                             const pc = pcRef.current;
                             if (pc) await applySenderQuality(pc, q);
+                            await broadcastQuality(q);
                           }}
                         />
                         <div className="ml-4">
@@ -846,9 +864,7 @@ export default function ShareClient({ code }: { code: string }) {
                     isActive ? "bg-emerald-100 text-emerald-600" : status === "error" ? "bg-red-100 text-red-600" : "bg-slate-100 text-slate-500",
                   ].join(" ")}
                 >
-                  <span className="text-5xl">
-                    {isActive ? "✅" : status === "error" ? "⚠️" : "🕒"}
-                  </span>
+                  <span className="text-5xl">{isActive ? "✅" : status === "error" ? "⚠️" : "🕒"}</span>
                 </div>
 
                 <h2 className="text-2xl lg:text-3xl font-extrabold text-slate-900 mb-4">
@@ -888,9 +904,7 @@ export default function ShareClient({ code }: { code: string }) {
                       Je bent verbonden met <strong>je kind</strong>
                     </>
                   ) : (
-                    <>
-                      Verbinding nog niet gestart
-                    </>
+                    <>Verbinding nog niet gestart</>
                   )}
                 </p>
               </div>
@@ -908,13 +922,8 @@ export default function ShareClient({ code }: { code: string }) {
               <section>
                 <div className="flex items-center justify-between mb-5">
                   <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Meest recente aanwijzing</h3>
-
                   <button
                     className="p-2 bg-slate-50 hover:bg-indigo-50 text-indigo-600 rounded-xl transition-colors"
-                    onClick={() => {
-                      // UI-only knop (geen functionaliteit), zoals in je screenshot.
-                      // We laten hem staan zonder side-effects.
-                    }}
                     type="button"
                     aria-label="Nieuwe aanwijzing"
                   >
@@ -969,7 +978,6 @@ export default function ShareClient({ code }: { code: string }) {
                     </button>
                   ))}
 
-                  {/* Fill placeholders up to 4 tiles for the grid look */}
                   {Array.from({ length: Math.max(0, 4 - earlier.length) }).map((_, i) => (
                     <div
                       key={`ph-${i}`}
@@ -980,11 +988,8 @@ export default function ShareClient({ code }: { code: string }) {
                   ))}
                 </div>
 
-                {/* subtle unseen indicator */}
                 {packets.some((p) => !p.seen) ? (
-                  <div className="mt-4 text-xs text-indigo-600 font-semibold">
-                    Nieuwe aanwijzing ontvangen
-                  </div>
+                  <div className="mt-4 text-xs text-indigo-600 font-semibold">Nieuwe aanwijzing ontvangen</div>
                 ) : null}
               </section>
             </div>
