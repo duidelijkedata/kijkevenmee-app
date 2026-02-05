@@ -545,11 +545,7 @@ export default function ShareClient({ code }: { code: string }) {
                     xmlns="http://www.w3.org/2000/svg"
                     className="text-slate-700"
                   >
-                    <path
-                      d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    />
+                    <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" strokeWidth="2" />
                     <path
                       d="M19.4 15a7.97 7.97 0 0 0 .1-1 7.97 7.97 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a8.2 8.2 0 0 0-1.7-1L15 3h-6l-.3 3a8.2 8.2 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.97 7.97 0 0 0-.1 1c0 .34.03.67.1 1l-2 1.6 2 3.4 2.4-1c.53.43 1.1.77 1.7 1l.3 3h6l.3-3c.6-.23 1.17-.57 1.7-1l2.4 1 2-3.4-2-1.6Z"
                       stroke="currentColor"
@@ -595,33 +591,27 @@ export default function ShareClient({ code }: { code: string }) {
                   </div>
                 </div>
 
-                {/* Right: steps + refresh + (conditional) preview + beëindigen */}
+                {/* Right: steps + refresh + beëindigen (zonder preview) */}
                 <div className="flex flex-col">
                   <div className="text-sm font-semibold tracking-wide text-slate-400">STAPPENPLAN</div>
 
                   <div className="mt-4 space-y-4">
                     <div className="flex items-start gap-4">
-                      <div className="h-9 w-9 rounded-full bg-blue-700 text-white flex items-center justify-center font-semibold">
-                        1
-                      </div>
+                      <div className="h-9 w-9 rounded-full bg-blue-700 text-white flex items-center justify-center font-semibold">1</div>
                       <div className="text-base text-slate-800">
                         Open de <span className="font-semibold">camera-app</span> op je telefoon.
                       </div>
                     </div>
 
                     <div className="flex items-start gap-4">
-                      <div className="h-9 w-9 rounded-full bg-blue-700 text-white flex items-center justify-center font-semibold">
-                        2
-                      </div>
+                      <div className="h-9 w-9 rounded-full bg-blue-700 text-white flex items-center justify-center font-semibold">2</div>
                       <div className="text-base text-slate-800">
                         Houd de telefoon voor het <span className="font-semibold">scherm</span>.
                       </div>
                     </div>
 
                     <div className="flex items-start gap-4">
-                      <div className="h-9 w-9 rounded-full bg-blue-700 text-white flex items-center justify-center font-semibold">
-                        3
-                      </div>
+                      <div className="h-9 w-9 rounded-full bg-blue-700 text-white flex items-center justify-center font-semibold">3</div>
                       <div className="text-base text-slate-800">
                         Tik op de <span className="font-semibold">link</span> die in beeld komt.
                       </div>
@@ -641,30 +631,25 @@ export default function ShareClient({ code }: { code: string }) {
 
                   {camError ? <div className="mt-3 text-sm text-red-600">{camError}</div> : null}
 
-                  {/* Preview + beëindigen zichtbaar zodra er beeld is */}
-                  {camPreviewJpeg ? (
-                    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-xs text-slate-600 mb-2 flex items-center justify-between">
-                        <span>
-                          Preview{" "}
-                          {camPreviewAt ? (
-                            <span className="text-slate-400">• {new Date(camPreviewAt).toLocaleTimeString()}</span>
-                          ) : null}
-                        </span>
-                        <span className="text-slate-500">{camLive ? "Live" : "Wachten…"}</span>
-                      </div>
-
-                      <div className="aspect-video w-full overflow-hidden rounded-xl bg-black flex items-center justify-center">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={camPreviewJpeg} alt="preview" className="w-full h-full object-contain" />
-                      </div>
-
-                      <div className="mt-3">
-                        <Button variant="primary" className="w-full" onClick={() => void stopUsingPhoneAndReturnToScreen()}>
-                          Beëindigen
-                        </Button>
-                      </div>
-                    </div>
+                  {/* ✅ Preview volledig verwijderd; knop verschijnt zodra camLive */}
+                  {camLive ? (
+                    <button
+                      type="button"
+                      onClick={() => void stopUsingPhoneAndReturnToScreen()}
+                      className="mt-6 w-full h-12 rounded-xl border border-red-200 bg-red-50 text-red-600 font-semibold flex items-center justify-center gap-2 hover:bg-red-100"
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path
+                          d="M10.5 7h3l1 2H18a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-3"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path d="M3 3l18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                      Stop gebruik mobiele telefoon
+                    </button>
                   ) : null}
                 </div>
               </div>
@@ -675,13 +660,7 @@ export default function ShareClient({ code }: { code: string }) {
               <span className="h-2.5 w-2.5 rounded-full bg-blue-600" />
               <span className="text-slate-600">Status:</span>
               <span className="font-semibold">
-                {camError
-                  ? "Fout"
-                  : camLive
-                  ? "Verbonden"
-                  : camLoading || !camLink
-                  ? "QR-code maken…"
-                  : "Aan het verbinden…"}
+                {camError ? "Fout" : camLive ? "Verbonden" : camLoading || !camLink ? "QR-code maken…" : "Aan het verbinden…"}
               </span>
             </div>
           </div>
@@ -885,7 +864,11 @@ export default function ShareClient({ code }: { code: string }) {
                 <div
                   className={[
                     "w-24 h-24 rounded-full flex items-center justify-center mb-8",
-                    isActive ? "bg-emerald-100 text-emerald-600" : status === "error" ? "bg-red-100 text-red-600" : "bg-slate-100 text-slate-500",
+                    isActive
+                      ? "bg-emerald-100 text-emerald-600"
+                      : status === "error"
+                        ? "bg-red-100 text-red-600"
+                        : "bg-slate-100 text-slate-500",
                   ].join(" ")}
                 >
                   <span className="text-5xl">{isActive ? "✅" : status === "error" ? "⚠️" : "🕒"}</span>
