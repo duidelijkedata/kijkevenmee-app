@@ -358,14 +358,15 @@ export default function ShareClient({ code }: { code: string }) {
                 </div>
 
                 <Button
-                  variant="ghost"
-                  className="h-9 w-9 p-0"
-                  onClick={() => {
-                    setCamOverlayOpen(false);
-                  }}
-                >
-                  ✕
-                </Button>
+  variant="secondary"
+  className="h-9 w-9 p-0"
+  onClick={() => {
+    setCamOverlayOpen(false);
+  }}
+>
+  ✕
+</Button>
+
               </div>
 
               <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
