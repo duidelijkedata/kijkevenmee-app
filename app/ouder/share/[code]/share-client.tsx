@@ -698,7 +698,7 @@ export default function ShareClient({ code }: { code: string }) {
             </div>
           </div>
         </div>
-      ) : null}}
+      ) : null}
                   </span>
                   <span className="text-slate-400">portrait</span>
                 </div>
