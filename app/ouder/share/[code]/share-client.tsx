@@ -138,7 +138,6 @@ export default function ShareClient({ code }: { code: string }) {
     if (!camLive) return false;
     if (!camPreviewAt) return false;
     const age = Date.now() - camPreviewAt;
-    // preview komt op telefoon ~2fps; als we < 4s oud zijn is hij vrijwel zeker nog live
     return age < 4000;
   }
 
@@ -159,7 +158,6 @@ export default function ShareClient({ code }: { code: string }) {
   }
 
   async function createPhoneCameraLink() {
-    // ✅ voorkom dubbel klikken / dubbele request
     if (camLoading) return;
 
     setCamLoading(true);
@@ -185,17 +183,10 @@ export default function ShareClient({ code }: { code: string }) {
     }
   }
 
-  async function copy(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {}
-  }
-
-  // ✅ NEW: open overlay direct in “QR screen” (geen tussenstap)
+  // ✅ open overlay direct in QR-screen
   async function openExtraCameraOverlay() {
     const liveNow = phoneIsLiveNow();
 
-    // reset UI alleen als niet live
     if (!liveNow) {
       setCamLive(false);
       setCamPreviewJpeg("");
@@ -209,7 +200,6 @@ export default function ShareClient({ code }: { code: string }) {
 
     setCamOpen(true);
 
-    // active source (kind)
     if (liveNow) {
       await broadcastActiveSource("camera");
       return;
@@ -217,7 +207,6 @@ export default function ShareClient({ code }: { code: string }) {
       await broadcastActiveSource("screen");
     }
 
-    // ✅ direct link genereren zodat je meteen naar “afbeelding 2” gaat
     await createPhoneCameraLink();
   }
 
@@ -540,7 +529,7 @@ export default function ShareClient({ code }: { code: string }) {
 
   return (
     <FullscreenShell sidebar={null}>
-      {/* ====== Telefoon overlay 2 ====== */}
+      {/* ====== Telefoon overlay (PNG layout) ====== */}
       {camOpen ? (
         <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4">
           <div className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl overflow-hidden">
@@ -572,9 +561,7 @@ export default function ShareClient({ code }: { code: string }) {
 
                 <div>
                   <div className="text-2xl font-semibold">Telefoon Koppelen met QR Code</div>
-                  <div className="text-sm text-slate-600 mt-1">
-                    Volg de stappen om je camera te verbinden.
-                  </div>
+                  <div className="text-sm text-slate-600 mt-1">Volg de stappen om je camera te verbinden.</div>
                 </div>
               </div>
 
@@ -598,11 +585,7 @@ export default function ShareClient({ code }: { code: string }) {
                         <div className="text-sm text-slate-500">QR-code wordt gemaakt…</div>
                       ) : (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={qrUrl(camLink)}
-                          alt="QR code"
-                          className="w-full h-auto rounded-xl"
-                        />
+                        <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-xl" />
                       )}
                     </div>
                   </div>
@@ -612,7 +595,7 @@ export default function ShareClient({ code }: { code: string }) {
                   </div>
                 </div>
 
-                {/* Right: steps + refresh */}
+                {/* Right: steps + refresh + (conditional) preview + beëindigen */}
                 <div className="flex flex-col">
                   <div className="text-sm font-semibold tracking-wide text-slate-400">STAPPENPLAN</div>
 
@@ -658,23 +641,28 @@ export default function ShareClient({ code }: { code: string }) {
 
                   {camError ? <div className="mt-3 text-sm text-red-600">{camError}</div> : null}
 
-                  {/* Optional preview (keeps functionality, but doesn’t change the main layout) */}
+                  {/* Preview + beëindigen zichtbaar zodra er beeld is */}
                   {camPreviewJpeg ? (
                     <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
                       <div className="text-xs text-slate-600 mb-2 flex items-center justify-between">
                         <span>
                           Preview{" "}
                           {camPreviewAt ? (
-                            <span className="text-slate-400">
-                              • {new Date(camPreviewAt).toLocaleTimeString()}
-                            </span>
+                            <span className="text-slate-400">• {new Date(camPreviewAt).toLocaleTimeString()}</span>
                           ) : null}
                         </span>
                         <span className="text-slate-500">{camLive ? "Live" : "Wachten…"}</span>
                       </div>
+
                       <div className="aspect-video w-full overflow-hidden rounded-xl bg-black flex items-center justify-center">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={camPreviewJpeg} alt="preview" className="w-full h-full object-contain" />
+                      </div>
+
+                      <div className="mt-3">
+                        <Button variant="primary" className="w-full" onClick={() => void stopUsingPhoneAndReturnToScreen()}>
+                          Beëindigen
+                        </Button>
                       </div>
                     </div>
                   ) : null}
@@ -696,99 +684,6 @@ export default function ShareClient({ code }: { code: string }) {
                   : "Aan het verbinden…"}
               </span>
             </div>
-          </div>
-        </div>
-      ) : null}
-                  </span>
-                  <span className="text-slate-400">portrait</span>
-                </div>
-
-                <div className="mx-auto w-full max-w-[280px]">
-                  <div className="relative w-full aspect-[9/16] rounded-2xl overflow-hidden bg-black">
-                    {camPreviewJpeg ? (
-                      <img src={camPreviewJpeg} alt="Live preview" className="absolute inset-0 h-full w-full object-cover" />
-                    ) : (
-                      <div className="absolute inset-0 flex items-center justify-center text-white/70 text-sm">
-                        Wacht op het eerste beeld…
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-3 flex gap-2">
-                  <Button variant="primary" onClick={stopUsingPhoneAndReturnToScreen} className="flex-1">
-                    Stop gebruik telefoon
-                  </Button>
-                </div>
-
-                <div className="mt-2 text-[11px] text-slate-500">
-                  Dit schakelt het kind automatisch terug naar jouw PC-scherm (en start schermdelen als dat nog niet aan staat).
-                </div>
-              </div>
-            ) : (
-              <>
-                {/* ✅ altijd dezelfde “QR/link” lay-out; tijdens laden tonen we skeleton */}
-                {camError ? (
-                  <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">{camError}</div>
-                ) : null}
-
-                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-                  <div className="rounded-xl border bg-slate-50 p-3">
-                    {camLoading || !camLink ? (
-                      <div className="w-full aspect-square rounded-lg bg-white flex items-center justify-center">
-                        <div className="text-sm text-slate-500">QR wordt gemaakt…</div>
-                      </div>
-                    ) : (
-                      <>
-                        <img src={qrUrl(camLink)} alt="QR code" className="w-full h-auto rounded-lg bg-white" />
-                        <div className="text-xs text-slate-500 mt-2">Scan met iPhone/Android camera app of QR scanner.</div>
-                      </>
-                    )}
-                  </div>
-
-                  <div className="rounded-xl border p-3">
-                    <div className="text-sm font-medium">Koppellink</div>
-
-                    <div className="mt-2 break-all text-xs text-slate-700">
-                      {camLoading || !camLink ? "Link wordt gemaakt…" : camLink}
-                    </div>
-
-                    <div className="mt-3 flex gap-2">
-                      <Button
-                        onClick={() => {
-                          if (camLink) void copy(camLink);
-                        }}
-                        className="flex-1"
-                        disabled={camLoading || !camLink}
-                      >
-                        Kopieer link
-                      </Button>
-
-                      <Button
-                        onClick={() => {
-                          setCamError("");
-                          void createPhoneCameraLink();
-                        }}
-                        className="w-28"
-                        disabled={camLoading}
-                      >
-                        Vernieuw
-                      </Button>
-                    </div>
-
-                    <div className="mt-3 text-xs text-slate-500">Tip: open de link op de telefoon en kies “Sta camera toe”.</div>
-                    <div className="mt-3 text-xs text-slate-500 text-right">Link verloopt na ±30 minuten.</div>
-                  </div>
-                </div>
-
-                <div className="mt-4 text-xs text-slate-500">
-                  Kind ziet nu:{" "}
-                  <span className="font-semibold">
-                    {activeSource === "screen" ? "Scherm" : activeSource === "camera" ? "Telefoon" : "Niets"}
-                  </span>
-                </div>
-              </>
-            )}
           </div>
         </div>
       ) : null}
