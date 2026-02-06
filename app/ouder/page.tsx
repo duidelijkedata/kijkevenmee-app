@@ -256,7 +256,7 @@ export default function OuderStart() {
       : "bg-indigo-600 hover:bg-indigo-700 text-white",
   ].join(" ")}
 >
-  <span className="text-2xl group-hover:scale-110 transition-transform">▶️</span>
+  <span className="text-2xl group-hover:scale-110 transition-transform"></span>
   <span className="font-bold">{loading ? "Bezig..." : "Start sessie"}</span>
 </button>
                       <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-500">
