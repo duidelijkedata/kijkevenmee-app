@@ -715,6 +715,11 @@ export default function KindVerbinden() {
                 >
                   Start een sessie
                 </Button>
+                <div className="mt-1 text-xs text-slate-500">
+  {!parentOnline && "Wachten tot ouder een sessie start…"}
+  {parentOnline && !activeSessions.length && "Geen actieve sessies gevonden."}
+  {status === "connecting" && "Bezig met verbinden…"}
+</div>
               </div>
 
               {activeError ? <div className="mt-2 text-xs text-red-700">{activeError}</div> : null}
