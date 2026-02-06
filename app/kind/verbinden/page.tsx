@@ -51,7 +51,6 @@ export default function KindVerbinden() {
   const supabase = useMemo(() => supabaseBrowser(), []);
   const [code, setCode] = useState("");
 
-  // Als 'Meekijken starten met code' UIT staat, tonen we sessies die al aan jou zijn toegewezen.
   const [useKoppelcode, setUseKoppelcode] = useState<boolean>(true);
   const [activeSessions, setActiveSessions] = useState<
     { id: string; code: string; requester_name?: string | null; created_at?: string }[]
@@ -62,7 +61,6 @@ export default function KindVerbinden() {
 
   const [activeError, setActiveError] = useState<string | null>(null);
 
-  // ✅ Ouder initieert altijd (scenario zonder extra 6-cijferige code)
   const [parentOnline, setParentOnline] = useState(false);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const currentSessionCodeRef = useRef<string | null>(null);
@@ -181,7 +179,6 @@ export default function KindVerbinden() {
     activeSourceRef.current = "screen";
     setActiveSource("screen");
 
-    // 🧽 tekenlaag resetten
     setDrawing(null);
     setShapes([]);
     redrawCanvas([]);
@@ -223,7 +220,6 @@ export default function KindVerbinden() {
     void refreshActiveSessions();
   }, []);
 
-  // ✅ Live: ouder online + sessie actief (alleen wanneer useKoppelcode UIT staat)
   useEffect(() => {
     if (useKoppelcode) return;
 
@@ -234,7 +230,6 @@ export default function KindVerbinden() {
 
       await refreshActiveSessions();
 
-      // Als we verbonden zijn en de sessie verdwijnt (ouder verbreekt), val terug naar idle.
       if ((connected || status === "connecting") && currentSessionCodeRef.current) {
         const stillActive = activeSessionsRef.current.some((s) => s.code === currentSessionCodeRef.current);
         if (!stillActive) {
@@ -254,7 +249,7 @@ export default function KindVerbinden() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useKoppelcode, connected, status]);
 
-  // ✅ Canvas size sync (FIX)
+  // ✅ Canvas size sync
   useEffect(() => {
     const wrap = wrapRef.current;
     const c = canvasRef.current;
@@ -264,18 +259,15 @@ export default function KindVerbinden() {
       const rect = wrap.getBoundingClientRect();
       const dpr = Math.max(1, window.devicePixelRatio || 1);
 
-      // CSS size
       c.style.width = `${rect.width}px`;
       c.style.height = `${rect.height}px`;
 
-      // internal buffer size
       const nextW = Math.max(1, Math.round(rect.width * dpr));
       const nextH = Math.max(1, Math.round(rect.height * dpr));
 
       if (c.width !== nextW) c.width = nextW;
       if (c.height !== nextH) c.height = nextH;
 
-      // redraw existing shapes
       redrawCanvas(shapes);
     };
 
@@ -544,13 +536,11 @@ export default function KindVerbinden() {
       const ny = (p.y - my) * scale + my;
 
       const cap = 300;
-      return {
-        x: clamp(nx, -cap, cap),
-        y: clamp(ny, -cap, cap),
-      };
+      return { x: clamp(nx, -cap, cap), y: clamp(ny, -cap, cap) };
     });
   }
 
+  // ✅ PAN: alleen als annotate UIT staat
   function onPointerDownPan(e: React.PointerEvent) {
     if (annotate) return;
     setPanning(true);
@@ -558,9 +548,11 @@ export default function KindVerbinden() {
   }
 
   function onPointerMovePan(e: React.PointerEvent) {
+    if (annotate) return;
     if (!panning) return;
     const start = panStartRef.current;
     if (!start) return;
+
     const dx = e.clientX - start.x;
     const dy = e.clientY - start.y;
 
@@ -583,7 +575,6 @@ export default function KindVerbinden() {
     const wCss = c.width / dpr;
     const hCss = c.height / dpr;
 
-    // reset + scale to CSS pixels
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, wCss, hCss);
 
@@ -645,12 +636,7 @@ export default function KindVerbinden() {
 
     const jpeg = tmp.toDataURL("image/jpeg", 0.85);
 
-    return {
-      id: uid(),
-      createdAt: Date.now(),
-      snapshotJpeg: jpeg,
-      shapes,
-    };
+    return { id: uid(), createdAt: Date.now(), snapshotJpeg: jpeg, shapes };
   }
 
   async function sendDrawPacket() {
@@ -667,47 +653,6 @@ export default function KindVerbinden() {
     } catch (e) {
       console.error(e);
     }
-  }
-
-  // ✅ pointer mapping FIX: canvas zit mee in transform, dus deel door zoom (geen -pan meer)
-  function onCanvasPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!annotate) return;
-
-    const c = canvasRef.current;
-    if (!c) return;
-    const rect = c.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / zoom;
-    const y = (e.clientY - rect.top) / zoom;
-
-    setDrawing({ startX: x, startY: y, currentX: x, currentY: y });
-  }
-
-  function onCanvasPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!drawing) return;
-
-    const c = canvasRef.current;
-    if (!c) return;
-    const rect = c.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / zoom;
-    const y = (e.clientY - rect.top) / zoom;
-
-    const nextDrawing = { ...drawing, currentX: x, currentY: y };
-    setDrawing(nextDrawing);
-
-    const draft = draftFromDrawing(nextDrawing, tool);
-    if (draft) redrawCanvas([...shapes, draft]);
-  }
-
-  function onCanvasPointerUp() {
-    if (!drawing) return;
-
-    const draft = draftFromDrawing(drawing, tool);
-    setDrawing(null);
-    if (!draft) return;
-
-    const nextShapes = [...shapes, draft];
-    setShapes(nextShapes);
-    redrawCanvas(nextShapes);
   }
 
   function draftFromDrawing(
@@ -732,6 +677,62 @@ export default function KindVerbinden() {
       return { kind: "arrow", x1, y1, x2, y2 };
     }
     return null;
+  }
+
+  // ✅ Canvas pointer handlers: voorkom bubbling + force capture
+  function onCanvasPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!annotate) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const el = e.currentTarget;
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {}
+
+    const rect = el.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / zoom;
+    const y = (e.clientY - rect.top) / zoom;
+
+    setDrawing({ startX: x, startY: y, currentX: x, currentY: y });
+  }
+
+  function onCanvasPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!annotate) return;
+    if (!drawing) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const el = e.currentTarget;
+    const rect = el.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / zoom;
+    const y = (e.clientY - rect.top) / zoom;
+
+    const nextDrawing = { ...drawing, currentX: x, currentY: y };
+    setDrawing(nextDrawing);
+
+    const draft = draftFromDrawing(nextDrawing, tool);
+    if (draft) redrawCanvas([...shapes, draft]);
+  }
+
+  function onCanvasPointerUp(e?: React.PointerEvent<HTMLCanvasElement>) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
+    }
+
+    if (!drawing) return;
+
+    const draft = draftFromDrawing(drawing, tool);
+    setDrawing(null);
+    if (!draft) return;
+
+    const nextShapes = [...shapes, draft];
+    setShapes(nextShapes);
+    redrawCanvas(nextShapes);
   }
 
   const canStartSession = !useKoppelcode && parentOnline && activeSessions.length > 0 && status !== "connecting" && !connected;
@@ -886,16 +887,13 @@ export default function KindVerbinden() {
             onPointerMove={onPointerMovePan}
             onPointerUp={onPointerUpPan}
             onPointerCancel={onPointerUpPan}
-            style={{ touchAction: annotate ? "none" : "pan-x pan-y" }}
+            // voor consistente pointer handling
+            style={{ touchAction: "none" }}
           >
-            <div
-              className="absolute top-3 right-3 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-800 z-10"
-              aria-label="actieve bron"
-            >
+            <div className="absolute top-3 right-3 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-800 z-30" aria-label="actieve bron">
               Bron: <span className="font-semibold">{activeSource === "camera" ? "Telefoon camera" : "PC scherm"}</span>
             </div>
 
-            {/* ✅ video + canvas samen in dezelfde transform-laag */}
             <div
               className="absolute inset-0"
               style={{
@@ -903,12 +901,21 @@ export default function KindVerbinden() {
                 transformOrigin: "center center",
               }}
             >
-              <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="absolute inset-0 w-full h-full object-contain z-0"
+                style={{ pointerEvents: "none" }} // ✅ video steelt geen events meer
+              />
 
               <canvas
                 ref={canvasRef}
-                className="absolute inset-0"
-                style={{ pointerEvents: annotate ? "auto" : "none" }}
+                className="absolute inset-0 z-20"
+                style={{
+                  pointerEvents: annotate ? "auto" : "none",
+                }}
                 onPointerDown={onCanvasPointerDown}
                 onPointerMove={onCanvasPointerMove}
                 onPointerUp={onCanvasPointerUp}
@@ -918,7 +925,7 @@ export default function KindVerbinden() {
             </div>
 
             {needsTapToPlay ? (
-              <div className="absolute inset-0 flex items-center justify-center">
+              <div className="absolute inset-0 flex items-center justify-center z-40">
                 <div className="rounded-2xl bg-black/70 border border-white/15 text-white px-4 py-3 text-sm">
                   <div className="font-semibold mb-1">Klik om beeld te starten</div>
                   <div className="text-white/70 mb-3">Je browser blokkeert autoplay. Klik hieronder om de stream te starten.</div>
@@ -930,7 +937,7 @@ export default function KindVerbinden() {
             ) : null}
 
             {isFullscreen ? (
-              <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2 z-10">
+              <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2 z-30">
                 Fullscreen — druk <b>ESC</b> om terug te gaan
               </div>
             ) : null}
