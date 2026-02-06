@@ -56,6 +56,9 @@ export default function KindVerbinden() {
   const [activeSessions, setActiveSessions] = useState<
     { id: string; code: string; requester_name?: string | null; created_at?: string }[]
   >([]);
+  const activeSessionsRef = useRef<
+    { id: string; code: string; requester_name?: string | null; created_at?: string }[]
+  >([]);
 
   const [activeError, setActiveError] = useState<string | null>(null);
 
@@ -63,9 +66,11 @@ export default function KindVerbinden() {
   const [parentOnline, setParentOnline] = useState(false);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const currentSessionCodeRef = useRef<string | null>(null);
-  const activeSessionsRef = useRef<
-    { id: string; code: string; requester_name?: string | null; created_at?: string }[]
-  >([]);
+
+  const parentName = useMemo(() => {
+    const n = (activeSessions?.[0]?.requester_name ?? "").trim();
+    return n || "Ouder";
+  }, [activeSessions]);
 
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
@@ -225,7 +230,7 @@ export default function KindVerbinden() {
       await refreshActiveSessions();
 
       // Als we verbonden zijn en de sessie verdwijnt (ouder verbreekt), val terug naar idle.
-      if (connected && currentSessionCodeRef.current) {
+      if ((connected || status === "connecting") && currentSessionCodeRef.current) {
         const stillActive = activeSessionsRef.current.some((s) => s.code === currentSessionCodeRef.current);
         if (!stillActive) {
           await cleanup();
@@ -242,7 +247,7 @@ export default function KindVerbinden() {
       window.clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useKoppelcode, connected]);
+  }, [useKoppelcode, connected, status]);
 
   async function connect(rawOverride?: string) {
     const raw = String(rawOverride ?? code).replace(/\D/g, "");
@@ -263,7 +268,7 @@ export default function KindVerbinden() {
     }
     waitHintTimerRef.current = window.setTimeout(() => {
       if (connectAttemptRef.current === attempt && !gotAnySignalRef.current) {
-        setConnectHint("Wachten op ouder… (nog niet op schermdelen?)");
+        setConnectHint(`Wachten op ${parentName}… (nog niet op schermdelen?)`);
       }
     }, 6000);
 
@@ -368,7 +373,6 @@ export default function KindVerbinden() {
           if (msg.source === "screen") {
             if (screenStreamRef.current) attachStream(screenStreamRef.current);
           } else if (msg.source === "camera") {
-            // voorkom zwart als cam-stream nog niet binnen is
             if (camStreamRef.current) attachStream(camStreamRef.current);
           }
         }
@@ -624,7 +628,6 @@ export default function KindVerbinden() {
     if (!wrapRef.current) return;
 
     const rect = wrapRef.current.getBoundingClientRect();
-
     const x = (e.clientX - rect.left - pan.x) / zoom;
     const y = (e.clientY - rect.top - pan.y) / zoom;
 
@@ -682,6 +685,9 @@ export default function KindVerbinden() {
     return null;
   }
 
+  const canStartSession = !useKoppelcode && parentOnline && activeSessions.length > 0 && status !== "connecting" && !connected;
+  const canEndSession = status !== "idle";
+
   return (
     <FullscreenShell
       sidebar={
@@ -690,24 +696,27 @@ export default function KindVerbinden() {
 
           {!useKoppelcode ? (
             <div className="rounded-xl border bg-white p-3">
-              <div className="text-sm font-semibold">Actieve sessies</div>
-              <div className="text-xs text-slate-600 mt-1">Kies een sessie om direct mee te kijken.</div>
+              <div className="text-sm font-semibold">Sessie</div>
+              <div className="text-xs text-slate-600 mt-1">Ouder start altijd de sessie. Jij kunt pas starten als er een sessie klaarstaat.</div>
 
               <div className="mt-2 flex items-center gap-2 text-xs">
                 <span
                   className={`inline-block h-2 w-2 rounded-full ${parentOnline ? "bg-emerald-500" : "bg-slate-300"}`}
                   aria-hidden="true"
                 />
-                <span className="text-slate-700">{parentOnline ? "Ouder is online" : "Wachten tot ouder de sessie start"}</span>
+                <span className="text-slate-700">
+                  {parentOnline ? `${parentName} is online` : "Wachten tot ouder de sessie start"}
+                </span>
               </div>
 
               {sessionNotice ? <div className="mt-2 text-xs text-slate-700">{sessionNotice}</div> : null}
+              {activeError ? <div className="mt-2 text-xs text-red-700">{activeError}</div> : null}
 
-              <div className="mt-3">
+              <div className="mt-3 grid grid-cols-2 gap-2">
                 <Button
                   variant="primary"
                   className="w-full"
-                  disabled={!parentOnline || status === "connecting" || !activeSessions.length}
+                  disabled={!canStartSession}
                   onClick={() => {
                     const first = activeSessions[0];
                     if (first) void connect(first.code);
@@ -715,14 +724,30 @@ export default function KindVerbinden() {
                 >
                   Start een sessie
                 </Button>
-                <div className="mt-1 text-xs text-slate-500">
-  {!parentOnline && "Wachten tot ouder een sessie start…"}
-  {parentOnline && !activeSessions.length && "Geen actieve sessies gevonden."}
-  {status === "connecting" && "Bezig met verbinden…"}
-</div>
+
+                <Button
+                  variant="secondary"
+                  className="w-full"
+                  disabled={!canEndSession}
+                  onClick={() => void disconnect()}
+                >
+                  Sessie beëindigen
+                </Button>
               </div>
 
-              {activeError ? <div className="mt-2 text-xs text-red-700">{activeError}</div> : null}
+              {/* ✅ Duidelijke reden als start disabled is */}
+              <div className="mt-1 text-xs text-slate-500">
+                {!parentOnline && "Wachten tot ouder een sessie start…"}
+                {parentOnline && !activeSessions.length && "Geen actieve sessies gevonden."}
+                {status === "connecting" && `Bezig met verbinden met ${parentName}…`}
+                {connected && "Je bent verbonden."}
+              </div>
+
+              <div className="mt-3">
+                <Button onClick={() => void refreshActiveSessions()} className="w-full">
+                  Vernieuw
+                </Button>
+              </div>
 
               <div className="mt-2 text-xs text-slate-600">
                 Status:{" "}
@@ -736,30 +761,6 @@ export default function KindVerbinden() {
                         : "Fout"}
                 </span>
                 {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
-              </div>
-
-              <div className="mt-3 flex flex-col gap-2">
-                {activeSessions.length ? (
-                  activeSessions.map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => void connect(s.code)}
-                      className="text-left rounded-xl border px-3 py-2 hover:bg-slate-50"
-                      disabled={status === "connecting"}
-                    >
-                      <div className="text-xs text-slate-500">{String(s.requester_name ?? "").trim() || "Ouder"}</div>
-                      <div className="font-semibold tracking-widest">{formatCode(s.code)}</div>
-                    </button>
-                  ))
-                ) : (
-                  <div className="text-xs text-slate-500">Geen actieve sessies.</div>
-                )}
-              </div>
-
-              <div className="mt-3">
-                <Button onClick={() => void refreshActiveSessions()} className="w-full">
-                  Vernieuw
-                </Button>
               </div>
             </div>
           ) : (
@@ -777,7 +778,13 @@ export default function KindVerbinden() {
               <div className="mt-2 text-xs text-slate-500">
                 Status:{" "}
                 <span className="font-semibold">
-                  {status === "idle" ? "Niet verbonden" : status === "connecting" ? "Verbinden…" : status === "connected" ? "Verbonden" : "Fout"}
+                  {status === "idle"
+                    ? "Niet verbonden"
+                    : status === "connecting"
+                      ? "Verbinden…"
+                      : status === "connected"
+                        ? "Verbonden"
+                        : "Fout"}
                 </span>
                 {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
               </div>
@@ -828,12 +835,9 @@ export default function KindVerbinden() {
           </div>
 
           <div className="rounded-xl border bg-white p-3">
-            <div className="text-sm font-semibold">Sessie</div>
+            <div className="text-sm font-semibold">Weergave</div>
             <div className="mt-3 flex flex-col gap-2">
               <Button onClick={() => setIsFullscreen(true)}>Fullscreen</Button>
-              <Button onClick={() => void disconnect()} disabled={!connected} className="w-full">
-                Verbreken
-              </Button>
 
               {remoteQuality ? (
                 <div className="text-xs text-slate-600">
