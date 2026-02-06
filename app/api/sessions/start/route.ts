@@ -14,7 +14,8 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const code = String(body?.code ?? "").replace(/\D/g, "");
+  const rawCode = String(body?.code ?? "");
+  const code = rawCode.replace(/\D/g, "");
 
   if (code.length !== 6) {
     return NextResponse.json({ error: "code_required" }, { status: 400 });
@@ -22,27 +23,45 @@ export async function POST(req: Request) {
 
   const admin = supabaseAdmin();
 
-  // Zet parent_started_at als de sessie bestaat en open is.
-  const { data: session, error } = await admin
+  // Probeer een nette naam van de ouder mee te geven (handig voor kind-indicator)
+  const { data: prof } = await admin
+    .from("profiles")
+    .select("display_name, full_name, name")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  const parentName =
+    String(prof?.display_name ?? prof?.full_name ?? prof?.name ?? "").trim() || null;
+
+  const nowIso = new Date().toISOString();
+
+  /**
+   * ✅ Belangrijk:
+   * sessions.helper_id is bij jullie de "ontvanger" (kind/helper account).
+   * Dus we mogen hier NIET filteren op helper_id=user.id.
+   * We starten de sessie op basis van code + status.
+   */
+  const { data: updated, error: upErr } = await admin
     .from("sessions")
-    .update({ parent_started_at: new Date().toISOString() })
-    .eq("helper_id", user.id)
+    .update({
+      parent_started_at: nowIso,
+      ...(parentName ? { requester_name: parentName } : {}),
+    })
     .eq("code", code)
     .eq("status", "open")
     .is("parent_started_at", null)
     .select("id, code, status, helper_id, requester_name, created_at, parent_started_at")
     .maybeSingle();
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 });
+  if (upErr) {
+    return NextResponse.json({ error: upErr.message }, { status: 400 });
   }
 
-  // Als hij al gestart was, halen we de sessie alsnog op (idempotent gedrag).
-  if (!session) {
+  // Idempotent: als hij al gestart is, geef de bestaande sessie terug
+  if (!updated) {
     const { data: existing, error: readErr } = await admin
       .from("sessions")
       .select("id, code, status, helper_id, requester_name, created_at, parent_started_at")
-      .eq("helper_id", user.id)
       .eq("code", code)
       .eq("status", "open")
       .maybeSingle();
@@ -54,5 +73,5 @@ export async function POST(req: Request) {
     return NextResponse.json({ session: existing ?? null });
   }
 
-  return NextResponse.json({ session });
+  return NextResponse.json({ session: updated });
 }
