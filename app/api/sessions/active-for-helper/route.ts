@@ -21,13 +21,21 @@ export async function GET() {
 
   const use_koppelcode = prof?.use_koppelcode ?? true;
 
-  // alleen de laatste/actuele sessie
+  /**
+   * ✅ Belangrijk:
+   * Kind mag pas een "actieve sessie" zien als de ouder de sessie echt gestart heeft.
+   * Daarom filteren we op parent_started_at != null.
+   *
+   * We houden status='open' aan, omdat jullie dat al gebruiken als "actief".
+   * (Als jullie status later 'started'/'active' gaan gebruiken kun je dat hier aanpassen.)
+   */
   const { data: sessions, error } = await supabase
     .from("sessions")
-    .select("id, code, status, created_at, requester_name")
+    .select("id, code, status, created_at, requester_name, parent_started_at")
     .eq("helper_id", user.id)
     .eq("status", "open")
-    .order("created_at", { ascending: false })
+    .not("parent_started_at", "is", null)
+    .order("parent_started_at", { ascending: false })
     .limit(1);
 
   if (error) {

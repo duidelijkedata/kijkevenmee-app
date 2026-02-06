@@ -743,12 +743,6 @@ export default function KindVerbinden() {
                 {connected && "Je bent verbonden."}
               </div>
 
-              <div className="mt-3">
-                <Button onClick={() => void refreshActiveSessions()} className="w-full">
-                  Vernieuw
-                </Button>
-              </div>
-
               <div className="mt-2 text-xs text-slate-600">
                 Status:{" "}
                 <span className="font-semibold">
