@@ -192,7 +192,7 @@ export default function OuderStart() {
                     2
                   </div>
                   <div>
-                    <div className="font-semibold text-slate-900">Klik op ‘Start hulp’</div>
+                    <div className="font-semibold text-slate-900">Klik op ‘Star sessie’</div>
                     <div className="text-sm text-slate-600">
                       De sessie wordt direct klaargezet voor jouw contactpersoon.
                     </div>
@@ -249,11 +249,11 @@ export default function OuderStart() {
 
                       <Button
                         variant="primary"
-                        className="mt-6 h-12 w-full rounded-2xl"
+                        className="mt-6 h-12 w-full rounded-2xl bg-indigo-300 text-white cursor-not-allowed bg-indigo-600 hover:bg-indigo-700 text-white"
                         onClick={start}
                         disabled={loading}
                       >
-                        {loading ? "Bezig..." : "Start hulp"}
+                        {loading ? "Bezig..." : "Start sessie"}
                       </Button>
 
                       <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-500">
