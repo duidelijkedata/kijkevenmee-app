@@ -722,7 +722,7 @@ export default function KindVerbinden() {
                     if (first) void connect(first.code);
                   }}
                 >
-                  Start een sessie
+                  Start
                 </Button>
 
                 <Button
@@ -731,7 +731,7 @@ export default function KindVerbinden() {
                   disabled={!canEndSession}
                   onClick={() => void disconnect()}
                 >
-                  Sessie beëindigen
+                  Stop
                 </Button>
               </div>
 
@@ -796,7 +796,7 @@ export default function KindVerbinden() {
                   Cirkel
                 </Button>
                 <Button variant={tool === "rect" ? "primary" : "secondary"} onClick={() => setTool("rect")}>
-                  Rechthoek
+                  Kader
                 </Button>
                 <Button variant={tool === "arrow" ? "primary" : "secondary"} onClick={() => setTool("arrow")}>
                   Pijl
