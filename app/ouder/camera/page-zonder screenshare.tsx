@@ -265,14 +265,13 @@ export default function OuderCameraPage() {
     };
   }, [supabase, code]);
 
-  async function startWithStream(stream: MediaStream) {
+  async function startCamera() {
     if (!code) return;
 
     setErrorText("");
     setStatus("connecting");
     lastCameraActivePingRef.current = 0;
 
-    // Stop huidige sessie zonder terug te schakelen naar "screen".
     await stop(false);
     setStatus("connecting");
 
@@ -291,56 +290,6 @@ export default function OuderCameraPage() {
       }
     };
 
-    streamRef.current = stream;
-
-    const track = stream.getVideoTracks?.()?.[0];
-    if (!track) {
-      setStatus("error");
-      setErrorText("Geen videotrack gevonden.");
-      await stop(true);
-      return;
-    }
-
-    track.addEventListener("ended", () => void stop(true));
-
-    pc.addTrack(track, stream);
-
-    if (videoPreviewRef.current) {
-      videoPreviewRef.current.srcObject = stream;
-      videoPreviewRef.current.muted = true;
-      videoPreviewRef.current.playsInline = true;
-      await videoPreviewRef.current.play().catch(() => {});
-    }
-
-    // Preview loop start
-    startPreviewLoop();
-
-    // De main (PC/kind) UI verwacht "camera" als actieve bron voor telefoon-stream.
-    try {
-      await broadcastActiveSource("camera");
-    } catch {}
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    await camChannelRef.current?.send({
-      type: "broadcast",
-      event: "signal",
-      payload: { type: "offer", sdp: offer } satisfies CamSignalMsg,
-    });
-
-    await camChannelRef.current?.send({
-      type: "broadcast",
-      event: "signal",
-      payload: { type: "hello", at: Date.now() } satisfies CamSignalMsg,
-    });
-
-    setStatus("connecting");
-  }
-
-  async function startCamera() {
-    if (!code) return;
-
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -352,46 +301,48 @@ export default function OuderCameraPage() {
         audio: false,
       });
 
-      await startWithStream(stream);
+      streamRef.current = stream;
+
+      const track = stream.getVideoTracks()[0];
+      track.addEventListener("ended", () => void stop(true));
+
+      pc.addTrack(track, stream);
+
+      if (videoPreviewRef.current) {
+        videoPreviewRef.current.srcObject = stream;
+        videoPreviewRef.current.muted = true;
+        videoPreviewRef.current.playsInline = true;
+        await videoPreviewRef.current.play().catch(() => {});
+      }
+
+      // Preview loop start
+      startPreviewLoop();
+
+      // Direct switch to camera once started
+      try {
+        await broadcastActiveSource("camera");
+      } catch {}
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      await camChannelRef.current?.send({
+        type: "broadcast",
+        event: "signal",
+        payload: { type: "offer", sdp: offer } satisfies CamSignalMsg,
+      });
+
+      await camChannelRef.current?.send({
+        type: "broadcast",
+        event: "signal",
+        payload: { type: "hello", at: Date.now() } satisfies CamSignalMsg,
+      });
+
+      setStatus("connecting");
     } catch (e: any) {
       console.error(e);
       setStatus("error");
       setErrorText(e?.message || "Kon camera niet starten. Geef toestemming in je browser.");
-      await stop(true);
-    }
-  }
-
-  async function startPhoneScreenShare() {
-    if (!code) return;
-
-    setErrorText("");
-
-    const getDisplayMedia = navigator.mediaDevices?.getDisplayMedia;
-    if (!getDisplayMedia) {
-      setStatus("error");
-      setErrorText("Scherm delen wordt niet ondersteund op dit apparaat/browser.");
-      return;
-    }
-
-    try {
-      // Let op: iOS/Safari kan dit (gedeeltelijk) blokkeren.
-      const stream = await getDisplayMedia.call(navigator.mediaDevices, {
-        video: {
-          frameRate: { ideal: 30, max: 30 },
-        },
-        audio: false,
-      } as any);
-
-      await startWithStream(stream);
-    } catch (e: any) {
-      console.error(e);
-      setStatus("error");
-      // Safari geeft vaak "NotAllowedError" als gebruiker annuleert of als het niet mag.
-      const msg =
-        e?.name === "NotAllowedError"
-          ? "Scherm delen geannuleerd of niet toegestaan."
-          : e?.message || "Kon telefoonscherm niet delen.";
-      setErrorText(msg);
       await stop(true);
     }
   }
@@ -439,19 +390,6 @@ export default function OuderCameraPage() {
             <Button onClick={() => void stop(true)} disabled={status === "resolving"} className="w-28">
               Stop
             </Button>
-          </div>
-
-          <Button
-            variant="secondary"
-            onClick={startPhoneScreenShare}
-            disabled={status === "resolving" || status === "connecting" || status === "connected" || !code}
-            className="mt-2 w-full"
-          >
-            Deel telefoonscherm
-          </Button>
-
-          <div className="mt-2 text-xs text-slate-500">
-            Let op: schermdelen werkt niet op alle apparaten/browsers. Als het niet kan, gebruik dan “Start camera”.
           </div>
 
           <div className="mt-3 text-sm text-slate-600">
