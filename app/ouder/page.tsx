@@ -246,10 +246,19 @@ export default function OuderStart() {
                             : "Je contactpersoon ziet de sessie direct bij Verbinden."}
                         </span>
                       </div>
-
-                      <Button variant="primary" className="mt-6 h-12 w-full rounded-2xl bg-indigo-600 text-white" onClick={start} disabled={loading} > {loading ? "Bezig..." : "Start sessie"} </Button>
-
-
+                      <button
+  onClick={() => void start()}
+  disabled={loading}
+  className={[
+    "mt-6 w-full flex items-center justify-center gap-4 p-4 rounded-2xl shadow-md transition-all group",
+    loading
+      ? "bg-indigo-300 text-white cursor-not-allowed"
+      : "bg-indigo-600 hover:bg-indigo-700 text-white",
+  ].join(" ")}
+>
+  <span className="text-2xl group-hover:scale-110 transition-transform">▶️</span>
+  <span className="font-bold">{loading ? "Bezig..." : "Start sessie"}</span>
+</button>
                       <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-500">
                         <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100">
                           🔒
