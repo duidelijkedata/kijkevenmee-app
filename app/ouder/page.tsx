@@ -248,13 +248,13 @@ export default function OuderStart() {
                       </div>
 
                       <Button
-                        variant="primary"
-                        className="mt-6 h-12 w-full rounded-2xl bg-indigo-300 text-white"
-                        onClick={start}
-                        disabled={loading}
-                      >
-                        {loading ? "Bezig..." : "Start sessie"}
-                      </Button>
+  className="mt-6 h-12 w-full rounded-2xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-indigo-300"
+  onClick={start}
+  disabled={loading}
+>
+  {loading ? "Bezig..." : "Start sessie"}
+</Button>
+
 
                       <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-500">
                         <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100">
