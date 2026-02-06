@@ -315,7 +315,7 @@ export default function OuderCameraPage() {
     // Preview loop start
     startPreviewLoop();
 
-    // De main (PC/kind) UI verwacht "camera" als actieve bron voor telefoon-stream.
+    // De main (PC/kind) UI verwacht "camera" als actieve bron voor telefoon-stream..
     try {
       await broadcastActiveSource("camera");
     } catch {}
