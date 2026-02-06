@@ -22,7 +22,7 @@ export async function POST(req: Request) {
   let auto_assigned = false;
   let assign_reason: string | null = null;
 
-  // ✅ NEW: als ouder ingelogd is en requester_name leeg is -> pak display_name uit profiel
+  // ✅ Als ouder ingelogd is en requester_name leeg is -> pak display_name uit profiel
   try {
     const supabase = await supabaseServer();
     const { data } = await supabase.auth.getUser();
@@ -94,18 +94,22 @@ export async function POST(req: Request) {
   const admin = supabaseAdmin();
   const code = generateCode();
 
+  // ✅ Ouder initieert sessie: markeer meteen als "gestart"
+  const nowIso = new Date().toISOString();
+
   const insertPayload: Record<string, any> = {
     code,
     status: "open",
     requester_name,
     requester_note,
+    parent_started_at: nowIso,
   };
   if (helper_id) insertPayload.helper_id = helper_id;
 
   const { data: session, error } = await admin
     .from("sessions")
     .insert(insertPayload)
-    .select("id, code, status, helper_id")
+    .select("id, code, status, helper_id, requester_name, parent_started_at, created_at")
     .single();
 
   if (error) {
