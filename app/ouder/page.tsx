@@ -248,7 +248,7 @@ export default function OuderStart() {
                       </div>
 
                       <Button
-                        className="mt-6 h-12 w-full rounded-2xl backgroundColor:'#4f46e5' text-color:'#ffffff'"
+                        className="mt-6 h-12 w-full rounded-2xl bg-indigo-600"
                           onClick={start}
                            disabled={loading}
                             >
