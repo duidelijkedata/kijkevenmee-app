@@ -10,25 +10,18 @@ import ViewerStage from "@/components/meekijk/ViewerStage";
 
 type Quality = "low" | "medium" | "high";
 type ActiveSource = "screen" | "camera";
-
 type DrawTool = "circle" | "rect" | "arrow";
 
-type DrawPacket = {
-  tool: DrawTool;
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  ts: number;
-};
+type DraftShape =
+  | { kind: "circle"; x: number; y: number; r: number }
+  | { kind: "rect"; x: number; y: number; w: number; h: number }
+  | { kind: "arrow"; x1: number; y1: number; x2: number; y2: number };
 
-type Shape = {
-  tool: DrawTool;
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
+type DrawPacket = {
   id: string;
+  createdAt: number;
+  snapshotJpeg: string; // data URL
+  shapes: DraftShape[];
 };
 
 type SignalMsg =
@@ -50,9 +43,12 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-export default function KindVerbindenPage() {
-  const supabase = useMemo(() => supabaseBrowser(), []);
+function uid() {
+  return Math.random().toString(36).slice(2) + "-" + Date.now().toString(36);
+}
 
+export default function KindVerbinden() {
+  const supabase = useMemo(() => supabaseBrowser(), []);
   const [code, setCode] = useState("");
 
   // Als 'Meekijken starten met code' UIT staat, tonen we sessies die al aan jou zijn toegewezen.
@@ -63,7 +59,7 @@ export default function KindVerbindenPage() {
 
   const [activeError, setActiveError] = useState<string | null>(null);
 
-  // ✅ Ouder initieert de sessie: kind wacht tot er een actieve sessie is
+  // ✅ Ouder initieert altijd (scenario zonder extra 6-cijferige code)
   const [parentOnline, setParentOnline] = useState(false);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const currentSessionCodeRef = useRef<string | null>(null);
@@ -102,29 +98,37 @@ export default function KindVerbindenPage() {
   const [annotate, setAnnotate] = useState(false);
   const [tool, setTool] = useState<DrawTool>("circle");
 
-  const [drawing, setDrawing] = useState<null | { x: number; y: number }>(null);
-  const [shapes, setShapes] = useState<Shape[]>([]);
-
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [drawing, setDrawing] = useState<null | { startX: number; startY: number; currentX: number; currentY: number }>(null);
+  const [shapes, setShapes] = useState<DraftShape[]>([]);
   const [needsTapToPlay, setNeedsTapToPlay] = useState(false);
 
-  // ===== helpers =====
+  // pan/zoom (bestond al)
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [panning, setPanning] = useState(false);
+  const panStartRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
   function attachStream(stream: MediaStream | null) {
     const v = videoRef.current;
     if (!v) return;
 
+    if (!stream) {
+      try {
+        (v as any).srcObject = null;
+      } catch {}
+      return;
+    }
+
     try {
-      if (stream) {
-        v.srcObject = stream;
-        const p = v.play();
-        if (p && typeof (p as any).catch === "function") {
-          (p as any).catch(() => setNeedsTapToPlay(true));
-        }
-      } else {
-        v.srcObject = null;
+      (v as any).srcObject = stream;
+    } catch {}
+
+    try {
+      const p = v.play();
+      if (p && typeof (p as any).catch === "function") {
+        (p as any).catch(() => setNeedsTapToPlay(true));
       }
     } catch {}
   }
@@ -163,16 +167,17 @@ export default function KindVerbindenPage() {
     gotAnySignalRef.current = false;
     setConnectHint(null);
 
-    currentSessionCodeRef.current = null;
-
     setNeedsTapToPlay(false);
     setConnected(false);
     setStatus("idle");
-
     setRemoteQuality(null);
+
+    currentSessionCodeRef.current = null;
+
+    activeSourceRef.current = "screen";
+    setActiveSource("screen");
   }
 
-  // cleanup on unmount
   useEffect(() => {
     return () => {
       void cleanup();
@@ -196,7 +201,7 @@ export default function KindVerbindenPage() {
       const sessions = Array.isArray(j?.sessions) ? j.sessions : [];
       setActiveSessions(sessions);
       activeSessionsRef.current = sessions;
-      setParentOnline(Boolean(sessions.length));
+      setParentOnline(sessions.length > 0);
     } catch {
       setActiveSessions([]);
       activeSessionsRef.current = [];
@@ -209,7 +214,7 @@ export default function KindVerbindenPage() {
     void refreshActiveSessions();
   }, []);
 
-  // ✅ Live status: ouder online + sessie actief (scenario zonder extra 6-cijferige code)
+  // ✅ Live: ouder online + sessie actief (alleen wanneer useKoppelcode UIT staat)
   useEffect(() => {
     if (useKoppelcode) return;
 
@@ -217,11 +222,9 @@ export default function KindVerbindenPage() {
 
     const tick = async () => {
       if (stopped) return;
-
       await refreshActiveSessions();
 
-      // Als we verbonden zijn via de "geen code" flow en de ouder verbreekt de sessie,
-      // verdwijnt deze uit de lijst met actieve sessies → terug naar uit-stand.
+      // Als we verbonden zijn en de sessie verdwijnt (ouder verbreekt), val terug naar idle.
       if (connected && currentSessionCodeRef.current) {
         const stillActive = activeSessionsRef.current.some((s) => s.code === currentSessionCodeRef.current);
         if (!stillActive) {
@@ -231,7 +234,6 @@ export default function KindVerbindenPage() {
       }
     };
 
-    // meteen 1 keer (en daarna interval)
     void tick();
     const id = window.setInterval(() => void tick(), 4000);
 
@@ -365,6 +367,8 @@ export default function KindVerbindenPage() {
           await pc0.addIceCandidate(msg.candidate);
         } else if (msg.type === "quality") {
           setRemoteQuality(msg.quality);
+        } else if (msg.type === "draw_packet") {
+          // (bestond al) hier wordt in jouw code waarschijnlijk elders verwerkt; we laten het ongewijzigd.
         } else if (msg.type === "active_source") {
           activeSourceRef.current = msg.source;
           setActiveSource(msg.source);
@@ -372,7 +376,7 @@ export default function KindVerbindenPage() {
           if (msg.source === "screen") {
             if (screenStreamRef.current) attachStream(screenStreamRef.current);
           } else if (msg.source === "camera") {
-            // ✅ FIX: als de camera-stream nog niet binnen is, blijf huidig scherm tonen (geen zwart).
+            // ✅ voorkom zwart als cam-stream nog niet binnen is
             if (camStreamRef.current) attachStream(camStreamRef.current);
           }
         }
@@ -450,6 +454,18 @@ export default function KindVerbindenPage() {
     await cleanup();
   }
 
+  function tapToPlay() {
+    try {
+      const v = videoRef.current;
+      if (!v) return;
+      setNeedsTapToPlay(false);
+      const p = v.play();
+      if (p && typeof (p as any).catch === "function") {
+        (p as any).catch(() => setNeedsTapToPlay(true));
+      }
+    } catch {}
+  }
+
   function zoomOut() {
     setZoom((z) => {
       const next = Math.max(1, +(z - 0.25).toFixed(2));
@@ -499,40 +515,142 @@ export default function KindVerbindenPage() {
     });
   }
 
-  function onPointerDown(e: React.PointerEvent) {
-    if (!annotate) return;
-    if (!wrapRef.current) return;
-
-    const rect = wrapRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left - pan.x) / zoom;
-    const y = (e.clientY - rect.top - pan.y) / zoom;
-    setDrawing({ x, y });
+  function onPointerDownPan(e: React.PointerEvent) {
+    if (annotate) return;
+    setPanning(true);
+    panStartRef.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
   }
 
-  function onPointerMove(e: React.PointerEvent) {
-    if (!drawing) return;
-    if (!wrapRef.current) return;
+  function onPointerMovePan(e: React.PointerEvent) {
+    if (!panning) return;
+    const start = panStartRef.current;
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
 
-    const rect = wrapRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left - pan.x) / zoom;
-    const y = (e.clientY - rect.top - pan.y) / zoom;
+    // hard cap zodat je niet “kwijt” raakt
+    const cap = 300;
+    setPan({ x: clamp(start.px + dx, -cap, cap), y: clamp(start.py + dy, -cap, cap) });
+  }
 
-    // preview canvas
+  function onPointerUpPan() {
+    setPanning(false);
+    panStartRef.current = null;
+  }
+
+  function redrawCanvas(nextShapes: DraftShape[]) {
     const c = canvasRef.current;
     if (!c) return;
     const ctx = c.getContext("2d");
     if (!ctx) return;
 
-    ctx.clearRect(0, 0, c.width, c.height);
+    const w = c.width;
+    const h = c.height;
 
-    // draw existing shapes
-    drawShapes(ctx, shapes);
+    ctx.clearRect(0, 0, w, h);
 
-    // draw current
-    drawShape(ctx, { tool, x1: drawing.x, y1: drawing.y, x2: x, y2: y });
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(59,130,246,0.9)";
+    ctx.fillStyle = "rgba(59,130,246,0.15)";
+
+    for (const s of nextShapes) {
+      if (s.kind === "rect") {
+        ctx.strokeRect(s.x, s.y, s.w, s.h);
+        ctx.fillRect(s.x, s.y, s.w, s.h);
+      } else if (s.kind === "circle") {
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      } else if (s.kind === "arrow") {
+        ctx.beginPath();
+        ctx.moveTo(s.x1, s.y1);
+        ctx.lineTo(s.x2, s.y2);
+        ctx.stroke();
+
+        const angle = Math.atan2(s.y2 - s.y1, s.x2 - s.x1);
+        const headLen = 14;
+        ctx.beginPath();
+        ctx.moveTo(s.x2, s.y2);
+        ctx.lineTo(s.x2 - headLen * Math.cos(angle - Math.PI / 7), s.y2 - headLen * Math.sin(angle - Math.PI / 7));
+        ctx.lineTo(s.x2 - headLen * Math.cos(angle + Math.PI / 7), s.y2 - headLen * Math.sin(angle + Math.PI / 7));
+        ctx.lineTo(s.x2, s.y2);
+        ctx.fillStyle = "rgba(59,130,246,0.9)";
+        ctx.fill();
+      }
+    }
+
+    ctx.restore();
   }
 
-  function onPointerUp(e: React.PointerEvent) {
+  function canvasToPacket(): DrawPacket | null {
+    const v = videoRef.current;
+    if (!v) return null;
+
+    const w = v.videoWidth || 1280;
+    const h = v.videoHeight || 720;
+
+    const tmp = document.createElement("canvas");
+    tmp.width = w;
+    tmp.height = h;
+    const ctx = tmp.getContext("2d");
+    if (!ctx) return null;
+
+    try {
+      ctx.drawImage(v, 0, 0, w, h);
+      const overlay = canvasRef.current;
+      if (overlay) ctx.drawImage(overlay, 0, 0, w, h);
+    } catch {
+      return null;
+    }
+
+    const jpeg = tmp.toDataURL("image/jpeg", 0.85);
+
+    return {
+      id: uid(),
+      createdAt: Date.now(),
+      snapshotJpeg: jpeg,
+      shapes,
+    };
+  }
+
+  async function sendDrawPacket() {
+    if (!channelRef.current) return;
+    const packet = canvasToPacket();
+    if (!packet) return;
+
+    // broadcast via screen channel (bestond al)
+    try {
+      await channelRef.current.send({
+        type: "broadcast",
+        event: "signal",
+        payload: { type: "draw_packet", packet } satisfies SignalMsg,
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function onCanvasPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!annotate) return;
+    if (!wrapRef.current) return;
+
+    const rect = wrapRef.current.getBoundingClientRect();
+
+    const x = (e.clientX - rect.left - pan.x) / zoom;
+    const y = (e.clientY - rect.top - pan.y) / zoom;
+
+    if (tool === "circle") {
+      setDrawing({ startX: x, startY: y, currentX: x, currentY: y });
+    } else if (tool === "rect") {
+      setDrawing({ startX: x, startY: y, currentX: x, currentY: y });
+    } else if (tool === "arrow") {
+      setDrawing({ startX: x, startY: y, currentX: x, currentY: y });
+    }
+  }
+
+  function onCanvasPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!drawing) return;
     if (!wrapRef.current) return;
 
@@ -540,284 +658,267 @@ export default function KindVerbindenPage() {
     const x = (e.clientX - rect.left - pan.x) / zoom;
     const y = (e.clientY - rect.top - pan.y) / zoom;
 
-    const next: Shape = {
-      tool,
-      x1: drawing.x,
-      y1: drawing.y,
-      x2: x,
-      y2: y,
-      id: String(Date.now()) + ":" + Math.random().toString(16).slice(2),
-    };
+    const nextDrawing = { ...drawing, currentX: x, currentY: y };
+    setDrawing(nextDrawing);
 
-    setShapes((s) => [...s, next]);
+    // preview
+    const draft = draftFromDrawing(nextDrawing, tool);
+    if (draft) redrawCanvas([...shapes, draft]);
+  }
+
+  function onCanvasPointerUp() {
+    if (!drawing) return;
+
+    const draft = draftFromDrawing(drawing, tool);
     setDrawing(null);
+    if (!draft) return;
 
-    // redraw
-    const c = canvasRef.current;
-    const ctx = c?.getContext("2d");
-    if (c && ctx) {
-      ctx.clearRect(0, 0, c.width, c.height);
-      drawShapes(ctx, [...shapes, next]);
-    }
+    const nextShapes = [...shapes, draft];
+    setShapes(nextShapes);
+    redrawCanvas(nextShapes);
   }
 
-  function drawShapes(ctx: CanvasRenderingContext2D, list: Shape[]) {
-    for (const s of list) drawShape(ctx, s);
-  }
+  function draftFromDrawing(
+    d: { startX: number; startY: number; currentX: number; currentY: number },
+    t: DrawTool
+  ): DraftShape | null {
+    const x1 = d.startX;
+    const y1 = d.startY;
+    const x2 = d.currentX;
+    const y2 = d.currentY;
 
-  function drawShape(ctx: CanvasRenderingContext2D, s: { tool: DrawTool; x1: number; y1: number; x2: number; y2: number }) {
-    ctx.save();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "rgba(59,130,246,0.9)";
-    ctx.fillStyle = "rgba(59,130,246,0.15)";
-
-    const x = Math.min(s.x1, s.x2);
-    const y = Math.min(s.y1, s.y2);
-    const w = Math.abs(s.x2 - s.x1);
-    const h = Math.abs(s.y2 - s.y1);
-
-    if (s.tool === "rect") {
-      ctx.strokeRect(x, y, w, h);
-      ctx.fillRect(x, y, w, h);
-    } else if (s.tool === "circle") {
-      const cx = (s.x1 + s.x2) / 2;
-      const cy = (s.y1 + s.y2) / 2;
-      const rx = w / 2;
-      const ry = h / 2;
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    } else if (s.tool === "arrow") {
-      // arrow from (x1,y1) to (x2,y2)
-      const x1 = s.x1;
-      const y1 = s.y1;
-      const x2 = s.x2;
-      const y2 = s.y2;
-
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-
-      // head
-      const angle = Math.atan2(y2 - y1, x2 - x1);
-      const headLen = 14;
-      ctx.beginPath();
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 7), y2 - headLen * Math.sin(angle - Math.PI / 7));
-      ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 7), y2 - headLen * Math.sin(angle + Math.PI / 7));
-      ctx.lineTo(x2, y2);
-      ctx.fillStyle = "rgba(59,130,246,0.9)";
-      ctx.fill();
+    if (t === "rect") {
+      return { kind: "rect", x: Math.min(x1, x2), y: Math.min(y1, y2), w: Math.abs(x2 - x1), h: Math.abs(y2 - y1) };
     }
-
-    ctx.restore();
-  }
-
-  async function sendSnapshot() {
-    const v = videoRef.current;
-    if (!v) return;
-
-    const canvas = document.createElement("canvas");
-    canvas.width = v.videoWidth || 1280;
-    canvas.height = v.videoHeight || 720;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-
-    const overlay = canvasRef.current;
-    if (overlay) {
-      ctx.drawImage(overlay, 0, 0, canvas.width, canvas.height);
+    if (t === "circle") {
+      const cx = (x1 + x2) / 2;
+      const cy = (y1 + y2) / 2;
+      const r = Math.max(4, Math.hypot(x2 - x1, y2 - y1) / 2);
+      return { kind: "circle", x: cx, y: cy, r };
     }
-
-    const dataUrl = canvas.toDataURL("image/png");
-    console.log("snapshot:", dataUrl.slice(0, 64), "...");
-
-    // (Bestond al) hier zou je je push logic doen, we laten het intact.
-    alert("Snapshot gemaakt (check console).");
+    if (t === "arrow") {
+      return { kind: "arrow", x1, y1, x2, y2 };
+    }
+    return null;
   }
 
   return (
-    <FullscreenShell isFullscreen={isFullscreen} onFullscreenChange={setIsFullscreen}>
-      <div className="h-screen w-screen flex overflow-hidden bg-slate-50">
-        {/* Left fixed menu */}
-        <div className="w-80 shrink-0 border-r bg-white p-4 overflow-auto">
-          <div className="text-lg font-semibold">Kind</div>
-          <div className="text-xs text-slate-600 mt-1">Verbind met de ouder om mee te kijken.</div>
+    <FullscreenShell
+      sidebar={
+        <div className="p-3 flex flex-col gap-3">
+          <div className="text-sm font-semibold">Kind – verbinden</div>
 
-          <div className="mt-4">
-            {!useKoppelcode ? (
-              <div className="rounded-xl border bg-white p-3">
-                <div className="text-sm font-semibold">Actieve sessies</div>
-                <div className="text-xs text-slate-600 mt-1">Kies een sessie om direct mee te kijken.</div>
+          {/* Active sessions (als useKoppelcode uit staat) */}
+          {!useKoppelcode ? (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="text-sm font-semibold">Actieve sessies</div>
+              <div className="text-xs text-slate-600 mt-1">Kies een sessie om direct mee te kijken.</div>
 
-                <div className="mt-2 flex items-center gap-2 text-xs">
-                  <span
-                    className={`inline-block h-2 w-2 rounded-full ${parentOnline ? "bg-emerald-500" : "bg-slate-300"}`}
-                    aria-hidden="true"
-                  />
-                  <span className="text-slate-700">
-                    {parentOnline ? "Ouder is online" : "Wachten tot ouder de sessie start"}
-                  </span>
-                </div>
-
-                {sessionNotice ? <div className="mt-2 text-xs text-slate-700">{sessionNotice}</div> : null}
-
-                {activeError ? <div className="mt-2 text-xs text-red-700">{activeError}</div> : null}
-
-                {/* ✅ Status + hint (nieuw) */}
-                <div className="mt-2 text-xs text-slate-600">
-                  Status:{" "}
-                  <span className="font-semibold">
-                    {status === "idle"
-                      ? "Niet verbonden"
-                      : status === "connecting"
-                        ? "Verbinden…"
-                        : status === "connected"
-                          ? "Verbonden"
-                          : "Fout"}
-                  </span>
-                  {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
-                </div>
-
-                <div className="mt-3 flex flex-col gap-2">
-                  {activeSessions.length ? (
-                    activeSessions.map((s) => (
-                      <button
-                        key={s.id}
-                        onClick={() => void connect(s.code)}
-                        className="text-left rounded-xl border px-3 py-2 hover:bg-slate-50"
-                        disabled={status === "connecting"}
-                      >
-                        <div className="text-xs text-slate-500">{String(s.requester_name ?? "").trim() || "Ouder"}</div>
-                        <div className="font-semibold tracking-widest">{formatCode(s.code)}</div>
-                      </button>
-                    ))
-                  ) : (
-                    <div className="text-xs text-slate-500">Geen actieve sessies.</div>
-                  )}
-                </div>
-
-                <div className="mt-3">
-                  <Button onClick={() => void refreshActiveSessions()} className="w-full">
-                    Vernieuw
-                  </Button>
-                </div>
+              <div className="mt-2 flex items-center gap-2 text-xs">
+                <span
+                  className={`inline-block h-2 w-2 rounded-full ${parentOnline ? "bg-emerald-500" : "bg-slate-300"}`}
+                  aria-hidden="true"
+                />
+                <span className="text-slate-700">{parentOnline ? "Ouder is online" : "Wachten tot ouder de sessie start"}</span>
               </div>
-            ) : (
-              <div className="rounded-xl border bg-white p-3">
-                <div className="text-sm font-semibold">Sessiecode</div>
-                <div className="text-xs text-slate-600 mt-1">Vul de 6-cijferige code in die je ouder/helper ziet.</div>
 
-                <div className="mt-3 flex gap-2">
-                  <Input value={formatCode(code)} onChange={(e) => setCode(e.target.value)} placeholder="123 456" />
-                  <Button variant="primary" onClick={() => void connect()} disabled={status === "connecting"}>
-                    Verbinden
-                  </Button>
-                </div>
+              {sessionNotice ? <div className="mt-2 text-xs text-slate-700">{sessionNotice}</div> : null}
 
-                <div className="mt-2 text-xs text-slate-500">
-                  Status:{" "}
-                  <span className="font-semibold">
-                    {status === "idle"
-                      ? "Niet verbonden"
-                      : status === "connecting"
-                        ? "Verbinden…"
-                        : status === "connected"
-                          ? "Verbonden"
-                          : "Fout"}
-                  </span>
-                  {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
-                </div>
+              {activeError ? <div className="mt-2 text-xs text-red-700">{activeError}</div> : null}
+
+              {/* ✅ Status + hint */}
+              <div className="mt-2 text-xs text-slate-600">
+                Status:{" "}
+                <span className="font-semibold">
+                  {status === "idle"
+                    ? "Niet verbonden"
+                    : status === "connecting"
+                      ? "Verbinden…"
+                      : status === "connected"
+                        ? "Verbonden"
+                        : "Fout"}
+                </span>
+                {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
               </div>
-            )}
 
-            <div className="mt-4 rounded-xl border bg-white p-3">
-              <div className="text-sm font-semibold">Tools</div>
-
-              <div className="mt-3 flex flex-col gap-2">
-                <Button onClick={() => setAnnotate((v) => !v)}>{annotate ? "Tekenen aan" : "Tekenen uit"}</Button>
-
-                <div className="flex gap-2">
-                  <Button variant={tool === "circle" ? "primary" : "secondary"} onClick={() => setTool("circle")}>
-                    Cirkel
-                  </Button>
-                  <Button variant={tool === "rect" ? "primary" : "secondary"} onClick={() => setTool("rect")}>
-                    Rechthoek
-                  </Button>
-                  <Button variant={tool === "arrow" ? "primary" : "secondary"} onClick={() => setTool("arrow")}>
-                    Pijl
-                  </Button>
-                </div>
-
-                <Button onClick={() => setShapes([])} disabled={!shapes.length}>
-                  Wis
+              {/* ✅ De knop wordt pas actief als ouder een sessie gestart heeft */}
+              <div className="mt-3">
+                <Button
+                  variant="primary"
+                  className="w-full"
+                  disabled={!parentOnline || status === "connecting" || !activeSessions.length}
+                  onClick={() => {
+                    const first = activeSessions[0];
+                    if (first) void connect(first.code);
+                  }}
+                >
+                  Start een sessie
                 </Button>
+              </div>
 
-                <Button onClick={() => void sendSnapshot()} disabled={!shapes.length || !connected}>
-                  Snapshot sturen
+              {/* Optioneel: sessielijst blijft bruikbaar (handig bij meerdere sessies) */}
+              <div className="mt-3 flex flex-col gap-2">
+                {activeSessions.length ? (
+                  activeSessions.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => void connect(s.code)}
+                      className="text-left rounded-xl border px-3 py-2 hover:bg-slate-50"
+                      disabled={status === "connecting"}
+                    >
+                      <div className="text-xs text-slate-500">{String(s.requester_name ?? "").trim() || "Ouder"}</div>
+                      <div className="font-semibold tracking-widest">{formatCode(s.code)}</div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="text-xs text-slate-500">Geen actieve sessies.</div>
+                )}
+              </div>
+
+              <div className="mt-3">
+                <Button onClick={() => void refreshActiveSessions()} className="w-full">
+                  Vernieuw
                 </Button>
               </div>
             </div>
+          ) : (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="text-sm font-semibold">Sessiecode</div>
+              <div className="text-xs text-slate-600 mt-1">Vul de 6-cijferige code in die je ouder/helper ziet.</div>
 
-            <div className="mt-4 rounded-xl border bg-white p-3">
-              <div className="text-sm font-semibold">Zoom</div>
               <div className="mt-3 flex gap-2">
-                <Button onClick={zoomOut}>-</Button>
-                <Button onClick={zoomIn}>+</Button>
-                <Button onClick={resetView}>Reset</Button>
+                <Input value={formatCode(code)} onChange={(e) => setCode(e.target.value)} placeholder="123 456" />
+                <Button variant="primary" onClick={() => void connect()} disabled={status === "connecting"}>
+                  Verbinden
+                </Button>
+              </div>
+
+              <div className="mt-2 text-xs text-slate-500">
+                Status:{" "}
+                <span className="font-semibold">
+                  {status === "idle" ? "Niet verbonden" : status === "connecting" ? "Verbinden…" : status === "connected" ? "Verbonden" : "Fout"}
+                </span>
+                {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
               </div>
             </div>
+          )}
 
-            <div className="mt-4 rounded-xl border bg-white p-3">
-              <div className="text-sm font-semibold">Sessie</div>
-              <div className="mt-3 flex flex-col gap-2">
-                <Button onClick={() => setIsFullscreen(true)}>Fullscreen</Button>
-                <Button onClick={() => void disconnect()} disabled={!connected} className="w-full">
-                  Verbreken
+          <div className="rounded-xl border bg-white p-3">
+            <div className="text-sm font-semibold">Aantekeningen</div>
+
+            <div className="mt-3 flex flex-col gap-2">
+              <Button onClick={() => setAnnotate((v) => !v)}>{annotate ? "Tekenen aan" : "Tekenen uit"}</Button>
+
+              <div className="flex gap-2">
+                <Button variant={tool === "circle" ? "primary" : "secondary"} onClick={() => setTool("circle")}>
+                  Cirkel
                 </Button>
-
-                {remoteQuality ? (
-                  <div className="text-xs text-slate-600">
-                    Kwaliteit: <span className="font-semibold">{remoteQuality}</span>
-                  </div>
-                ) : null}
+                <Button variant={tool === "rect" ? "primary" : "secondary"} onClick={() => setTool("rect")}>
+                  Rechthoek
+                </Button>
+                <Button variant={tool === "arrow" ? "primary" : "secondary"} onClick={() => setTool("arrow")}>
+                  Pijl
+                </Button>
               </div>
+
+              <Button onClick={() => { setShapes([]); redrawCanvas([]); }} disabled={!shapes.length}>
+                Wis
+              </Button>
+
+              <Button onClick={() => void sendDrawPacket()} disabled={!shapes.length || !connected}>
+                Snapshot sturen
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded-xl border bg-white p-3">
+            <div className="text-sm font-semibold">Zoom</div>
+            <div className="mt-3 flex gap-2">
+              <Button onClick={zoomOut}>-</Button>
+              <Button onClick={zoomIn}>+</Button>
+              <Button onClick={resetView}>Reset</Button>
+            </div>
+          </div>
+
+          <div className="rounded-xl border bg-white p-3">
+            <div className="text-sm font-semibold">Sessie</div>
+            <div className="mt-3 flex flex-col gap-2">
+              <Button onClick={() => setIsFullscreen(true)}>Fullscreen</Button>
+              <Button onClick={() => void disconnect()} disabled={!connected} className="w-full">
+                Verbreken
+              </Button>
+
+              {remoteQuality ? (
+                <div className="text-xs text-slate-600">
+                  Kwaliteit: <span className="font-semibold">{remoteQuality}</span>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
-
-        {/* Main video area */}
-        <div className="flex-1 relative overflow-hidden bg-black">
-          <ViewerStage
-            wrapRef={wrapRef}
-            videoRef={videoRef}
-            canvasRef={canvasRef}
-            zoom={zoom}
-            pan={pan}
-            setPan={setPan}
-            onWheel={onWheel}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            annotate={annotate}
-            needsTapToPlay={needsTapToPlay}
-            onTapToPlay={() => {
-              setNeedsTapToPlay(false);
-              const v = videoRef.current;
-              if (v) void v.play().catch(() => setNeedsTapToPlay(true));
-            }}
-          />
-
-          {/* kleine overlay badge met bron */}
-          <div className="absolute top-3 right-3 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-800">
+      }
+    >
+      <ViewerStage
+        wrapRef={wrapRef}
+        isFullscreen={isFullscreen}
+        onFullscreenChange={setIsFullscreen}
+        rightTop={
+          <div className="rounded-full bg-white/90 px-3 py-1 text-xs text-slate-800">
             Bron: <span className="font-semibold">{activeSource === "camera" ? "Telefoon camera" : "PC scherm"}</span>
           </div>
+        }
+      >
+        <div className="relative w-full h-full bg-black">
+          <div
+            className="absolute inset-0"
+            onWheel={onWheel}
+            onPointerDown={onPointerDownPan}
+            onPointerMove={onPointerMovePan}
+            onPointerUp={onPointerUpPan}
+            onPointerCancel={onPointerUpPan}
+            style={{ touchAction: annotate ? "none" : "pan-x pan-y" }}
+          >
+            <div
+              className="absolute inset-0"
+              style={{
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: "center center",
+              }}
+            >
+              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
+            </div>
+
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0"
+              style={{ pointerEvents: annotate ? "auto" : "none" }}
+              onPointerDown={onCanvasPointerDown}
+              onPointerMove={onCanvasPointerMove}
+              onPointerUp={onCanvasPointerUp}
+              onPointerCancel={onCanvasPointerUp}
+              onPointerLeave={onCanvasPointerUp}
+            />
+
+            {needsTapToPlay ? (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="rounded-2xl bg-black/70 border border-white/15 text-white px-4 py-3 text-sm">
+                  <div className="font-semibold mb-1">Klik om beeld te starten</div>
+                  <div className="text-white/70 mb-3">Je browser blokkeert autoplay. Klik hieronder om de stream te starten.</div>
+                  <Button variant="primary" onClick={tapToPlay}>
+                    Start beeld
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {isFullscreen ? (
+              <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2">
+                Fullscreen — druk <b>ESC</b> om terug te gaan
+              </div>
+            ) : null}
+          </div>
         </div>
-      </div>
+      </ViewerStage>
     </FullscreenShell>
   );
 }
