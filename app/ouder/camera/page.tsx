@@ -366,7 +366,7 @@ export default function OuderCameraPage() {
         <Card>
           <h1 className="text-xl font-semibold">Telefoon als camera</h1>
           <p className="text-slate-600 mt-1">
-            Gebruik je telefoon als losse camera. Richt hem op wat je wilt laten zien (router, brief, toetsenbord, etc.).
+            Gebruik je telefoon als losse camera. Richt hem op wat je wilt laten zien.
           </p>
 
           <div className="mt-4 rounded-xl overflow-hidden bg-black">
