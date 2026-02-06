@@ -687,284 +687,222 @@ export default function KindVerbinden() {
 
   const canStartSession = !useKoppelcode && parentOnline && activeSessions.length > 0 && status !== "connecting" && !connected;
   const canEndSession = status !== "idle";
+
   return (
-    <div
-      className="min-h-screen bg-slate-950 text-slate-100"
-      style={{ ["--primary-dark" as any]: "#0a0b14" }}
-    >
-      <FullscreenShell
-        sidebar={
-          <div className="h-full flex flex-col bg-[var(--primary-dark)] text-slate-100">
-            {/* Header */}
-            <div className="px-4 pt-5 pb-4 border-b border-white/10">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-white/10 grid place-items-center">
-                  <span className="text-lg">👀</span>
-                </div>
-                <div className="leading-tight">
-                  <div className="text-base font-semibold">Kijk even Mee</div>
-                  <div className="mt-1 inline-flex items-center gap-2 rounded-full bg-emerald-500/15 border border-emerald-500/25 px-3 py-1 text-[11px] font-semibold text-emerald-200">
-                    <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />
-                    Systeem is Gereed
-                  </div>
-                </div>
+    <FullscreenShell
+      sidebar={
+        <div className="p-3 flex flex-col gap-3">
+          <div className="text-sm font-semibold">Kind – verbinden</div>
+
+          {!useKoppelcode ? (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="text-sm font-semibold">Sessie</div>
+              <div className="text-xs text-slate-600 mt-1">Ouder start altijd de sessie. Jij kunt pas starten als er een sessie klaarstaat.</div>
+
+              <div className="mt-2 flex items-center gap-2 text-xs">
+                <span
+                  className={`inline-block h-2 w-2 rounded-full ${parentOnline ? "bg-emerald-500" : "bg-slate-300"}`}
+                  aria-hidden="true"
+                />
+                <span className="text-slate-700">
+                  {parentOnline ? `${parentName} is online` : "Wachten tot ouder de sessie start"}
+                </span>
               </div>
 
-              <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                <div className="text-sm font-semibold">{parentName || "Contactpersoon"}</div>
-                <div className="text-xs text-white/60">Contactpersoon</div>
+              {sessionNotice ? <div className="mt-2 text-xs text-slate-700">{sessionNotice}</div> : null}
+              {activeError ? <div className="mt-2 text-xs text-red-700">{activeError}</div> : null}
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <Button
+                  variant="primary"
+                  className="w-full"
+                  disabled={!canStartSession}
+                  onClick={() => {
+                    const first = activeSessions[0];
+                    if (first) void connect(first.code);
+                  }}
+                >
+                  Start een sessie
+                </Button>
+
+                <Button
+                  variant="secondary"
+                  className="w-full"
+                  disabled={!canEndSession}
+                  onClick={() => void disconnect()}
+                >
+                  Sessie beëindigen
+                </Button>
+              </div>
+
+              {/* ✅ Duidelijke reden als start disabled is */}
+              <div className="mt-1 text-xs text-slate-500">
+                {!parentOnline && "Wachten tot ouder een sessie start…"}
+                {parentOnline && !activeSessions.length && "Geen actieve sessies gevonden."}
+                {status === "connecting" && `Bezig met verbinden met ${parentName}…`}
+                {connected && "Je bent verbonden."}
+              </div>
+
+              <div className="mt-2 text-xs text-slate-600">
+                Status:{" "}
+                <span className="font-semibold">
+                  {status === "idle"
+                    ? "Niet verbonden"
+                    : status === "connecting"
+                      ? "Verbinden…"
+                      : status === "connected"
+                        ? "Verbonden"
+                        : "Fout"}
+                </span>
+                {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
               </div>
             </div>
+          ) : (
+            <div className="rounded-xl border bg-white p-3">
+              <div className="text-sm font-semibold">Sessiecode</div>
+              <div className="text-xs text-slate-600 mt-1">Vul de 6-cijferige code in die je ouder/helper ziet.</div>
 
-            {/* Content */}
-            <div className="flex-1 overflow-auto p-4 space-y-4">
-              {/* Verbinden */}
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="text-sm font-semibold">Contact - verbinden</div>
-                <div className="mt-1 text-xs text-white/60">
-                  Ouder start altijd de sessie. Jij kunt pas starten als er een sessie klaarstaat.
-                </div>
-
-                {!useKoppelcode ? (
-                  <>
-                    <div className="mt-3 flex items-center gap-2 text-xs">
-                      <span
-                        className={`inline-block h-2 w-2 rounded-full ${parentOnline ? "bg-emerald-400" : "bg-white/25"}`}
-                        aria-hidden="true"
-                      />
-                      <span className="text-white/80">
-                        {parentOnline ? `${parentName} is online` : "Wachten tot ouder de sessie start"}
-                      </span>
-                    </div>
-
-                    {sessionNotice ? <div className="mt-2 text-xs text-white/80">{sessionNotice}</div> : null}
-                    {activeError ? <div className="mt-2 text-xs text-red-300">{activeError}</div> : null}
-
-                    <div className="mt-4 grid grid-cols-2 gap-2">
-                      <Button
-                        variant="primary"
-                        className="w-full"
-                        disabled={!canStartSession}
-                        onClick={() => {
-                          const first = activeSessions[0];
-                          if (first) void connect(first.code);
-                        }}
-                      >
-                        Start
-                      </Button>
-
-                      <Button variant="secondary" className="w-full" disabled={!canEndSession} onClick={() => void disconnect()}>
-                        Stop
-                      </Button>
-                    </div>
-
-                    <div className="mt-2 text-xs text-white/60">
-                      {!parentOnline && "Wachten tot ouder een sessie start…"}
-                      {parentOnline && !activeSessions.length && "Geen actieve sessies gevonden."}
-                      {status === "connecting" && `Bezig met verbinden met ${parentName}…`}
-                      {connected && "Je bent verbonden."}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="mt-3 text-xs text-white/60">Vul de 6-cijferige code in die je ouder/helper ziet.</div>
-                    <div className="mt-3 flex gap-2">
-                      <Input value={formatCode(code)} onChange={(e) => setCode(e.target.value)} placeholder="123 456" />
-                      <Button variant="primary" onClick={() => void connect()} disabled={status === "connecting"}>
-                        Verbinden
-                      </Button>
-                    </div>
-                  </>
-                )}
-
-                <div className="mt-3 text-xs text-white/70">
-                  Status:{" "}
-                  <span className="font-semibold text-white">
-                    {status === "idle"
-                      ? "Niet verbonden"
-                      : status === "connecting"
-                        ? "Verbinden…"
-                        : status === "connected"
-                          ? "Verbonden"
-                          : "Fout"}
-                  </span>
-                  {connectHint ? <div className="mt-1 text-xs text-white/55">{connectHint}</div> : null}
-                </div>
+              <div className="mt-3 flex gap-2">
+                <Input value={formatCode(code)} onChange={(e) => setCode(e.target.value)} placeholder="123 456" />
+                <Button variant="primary" onClick={() => void connect()} disabled={status === "connecting"}>
+                  Verbinden
+                </Button>
               </div>
 
-              {/* Instructies */}
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="text-sm font-semibold">Instructies</div>
+              <div className="mt-2 text-xs text-slate-500">
+                Status:{" "}
+                <span className="font-semibold">
+                  {status === "idle"
+                    ? "Niet verbonden"
+                    : status === "connecting"
+                      ? "Verbinden…"
+                      : status === "connected"
+                        ? "Verbonden"
+                        : "Fout"}
+                </span>
+                {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
+              </div>
+            </div>
+          )}
 
-                <div className="mt-3 space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs text-white/60">Tekenen</div>
-                    <Button onClick={() => setAnnotate((v) => !v)} variant={annotate ? "primary" : "secondary"}>
-                      {annotate ? "Aan" : "Uit"}
-                    </Button>
-                  </div>
+          <div className="rounded-xl border bg-white p-3">
+            <div className="text-sm font-semibold">Aantekeningen</div>
 
-                  <div className="flex gap-2">
-                    <Button variant={tool === "circle" ? "primary" : "secondary"} onClick={() => setTool("circle")}>
-                      Cirkel
-                    </Button>
-                    <Button variant={tool === "rect" ? "primary" : "secondary"} onClick={() => setTool("rect")}>
-                      Rechthoek
-                    </Button>
-                    <Button variant={tool === "arrow" ? "primary" : "secondary"} onClick={() => setTool("arrow")}>
-                      Pijl
-                    </Button>
-                  </div>
+            <div className="mt-3 flex flex-col gap-2">
+              <Button onClick={() => setAnnotate((v) => !v)}>{annotate ? "Tekenen aan" : "Tekenen uit"}</Button>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
-                      onClick={() => {
-                        setShapes([]);
-                        redrawCanvas([]);
-                      }}
-                      disabled={!shapes.length}
-                      variant="secondary"
-                    >
-                      Wis
-                    </Button>
-
-                    <Button onClick={() => void sendDrawPacket()} disabled={!shapes.length || !connected} variant="primary">
-                      Snapshot sturen
-                    </Button>
-                  </div>
-                </div>
+              <div className="flex gap-2">
+                <Button variant={tool === "circle" ? "primary" : "secondary"} onClick={() => setTool("circle")}>
+                  Cirkel
+                </Button>
+                <Button variant={tool === "rect" ? "primary" : "secondary"} onClick={() => setTool("rect")}>
+                  Rechthoek
+                </Button>
+                <Button variant={tool === "arrow" ? "primary" : "secondary"} onClick={() => setTool("arrow")}>
+                  Pijl
+                </Button>
               </div>
 
-              {/* Zoom */}
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="text-sm font-semibold">Zoom controls</div>
-                <div className="mt-3 flex gap-2">
-                  <Button onClick={zoomOut} variant="secondary">
-                    -
-                  </Button>
-                  <Button onClick={zoomIn} variant="secondary">
-                    +
-                  </Button>
-                  <Button onClick={resetView} variant="secondary">
-                    Reset
-                  </Button>
-                </div>
-              </div>
+              <Button
+                onClick={() => {
+                  setShapes([]);
+                  redrawCanvas([]);
+                }}
+                disabled={!shapes.length}
+              >
+                Wis
+              </Button>
 
-              {/* Fullscreen + quality */}
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">Fullscreen</div>
-                  <Button onClick={() => setIsFullscreen(true)} variant="secondary">
-                    Fullscreen
-                  </Button>
-                </div>
-
-                {remoteQuality ? (
-                  <div className="mt-2 text-xs text-white/60">
-                    Kwaliteit: <span className="font-semibold text-white">{remoteQuality}</span>
-                  </div>
-                ) : null}
-              </div>
-
-              {/* Source */}
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="text-xs font-bold tracking-widest text-white/60">BRON:</div>
-                <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold">
-                  {activeSource === "camera" ? "TELEFOON CAMERA" : "WINDOWS PC"}
-                </div>
-              </div>
+              <Button onClick={() => void sendDrawPacket()} disabled={!shapes.length || !connected}>
+                Snapshot sturen
+              </Button>
             </div>
           </div>
-        }
-      >
-        <ViewerStage>
-          <div className="relative h-full w-full bg-black">
-            {/* Top right source badge */}
-            <div className="absolute top-4 right-4 z-10">
-              <div className="rounded-full bg-white/10 backdrop-blur border border-white/10 px-4 py-2 text-xs font-semibold text-white">
-                BRON: <span className="opacity-90">{activeSource === "camera" ? "Telefoon camera" : "PC scherm"}</span>
-              </div>
+
+          <div className="rounded-xl border bg-white p-3">
+            <div className="text-sm font-semibold">Zoom</div>
+            <div className="mt-3 flex gap-2">
+              <Button onClick={zoomOut}>-</Button>
+              <Button onClick={zoomIn}>+</Button>
+              <Button onClick={resetView}>Reset</Button>
+            </div>
+          </div>
+
+          <div className="rounded-xl border bg-white p-3">
+            <div className="text-sm font-semibold">Weergave</div>
+            <div className="mt-3 flex flex-col gap-2">
+              <Button onClick={() => setIsFullscreen(true)}>Fullscreen</Button>
+
+              {remoteQuality ? (
+                <div className="text-xs text-slate-600">
+                  Kwaliteit: <span className="font-semibold">{remoteQuality}</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      }
+    >
+      <ViewerStage>
+        <div className="h-full w-full flex items-center justify-center bg-black">
+          <div
+            ref={wrapRef}
+            className="relative w-full h-full overflow-hidden"
+            onWheel={onWheel}
+            onPointerDown={onPointerDownPan}
+            onPointerMove={onPointerMovePan}
+            onPointerUp={onPointerUpPan}
+            onPointerCancel={onPointerUpPan}
+            style={{ touchAction: annotate ? "none" : "pan-x pan-y" }}
+          >
+            <div
+              className="absolute top-3 right-3 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-800 z-10"
+              aria-label="actieve bron"
+            >
+              Bron: <span className="font-semibold">{activeSource === "camera" ? "Telefoon camera" : "PC scherm"}</span>
             </div>
 
             <div
-              ref={wrapRef}
-              className="relative w-full h-full overflow-hidden"
-              onWheel={onWheel}
-              onPointerDown={onPointerDownPan}
-              onPointerMove={onPointerMovePan}
-              onPointerUp={onPointerUpPan}
-              onPointerCancel={onPointerUpPan}
-              style={{ touchAction: annotate ? "none" : "pan-x pan-y" }}
+              className="absolute inset-0"
+              style={{
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: "center center",
+              }}
             >
-              <div
-                className="absolute inset-0"
-                style={{
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                  transformOrigin: "center center",
-                }}
-              >
-                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
-              </div>
-
-              <canvas
-                ref={canvasRef}
-                className="absolute inset-0"
-                style={{ pointerEvents: annotate ? "auto" : "none" }}
-                onPointerDown={onCanvasPointerDown}
-                onPointerMove={onCanvasPointerMove}
-                onPointerUp={onCanvasPointerUp}
-                onPointerCancel={onCanvasPointerUp}
-                onPointerLeave={onCanvasPointerUp}
-              />
-
-              {/* Waiting overlay (layout only) */}
-              {!connected ? (
-                <div className="absolute inset-0 grid place-items-center">
-                  <div className="max-w-md text-center px-6">
-                    <div className="text-white/90 font-semibold mb-2">Wachten op gedeeld scherm…</div>
-                    <div className="text-sm text-white/60">
-                      Zodra de ouder de verbinding accepteert en het scherm deelt, verschijnt de weergave hier.
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
-              {needsTapToPlay ? (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="rounded-2xl bg-black/70 border border-white/15 text-white px-4 py-3 text-sm">
-                    <div className="font-semibold mb-1">Klik om beeld te starten</div>
-                    <div className="text-white/70 mb-3">
-                      Je browser blokkeert autoplay. Klik hieronder om de stream te starten.
-                    </div>
-                    <Button variant="primary" onClick={tapToPlay}>
-                      Start beeld
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
-
-              {isFullscreen ? (
-                <div className="absolute top-4 left-4 rounded-xl bg-black/60 text-white text-sm px-3 py-2 z-10">
-                  Fullscreen — druk <b>ESC</b> om terug te gaan
-                </div>
-              ) : null}
+              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
             </div>
 
-            {/* Bottom connection status */}
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10">
-              <div className="bg-white/5 backdrop-blur-sm border border-white/10 px-6 py-2 rounded-full flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${connected ? "bg-emerald-400" : "bg-white/25"}`} />
-                  <span className="text-[10px] font-bold text-white/80 uppercase tracking-widest">
-                    Verbinding: {connected ? "Actief" : "Inactief"}
-                  </span>
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0"
+              style={{ pointerEvents: annotate ? "auto" : "none" }}
+              onPointerDown={onCanvasPointerDown}
+              onPointerMove={onCanvasPointerMove}
+              onPointerUp={onCanvasPointerUp}
+              onPointerCancel={onCanvasPointerUp}
+              onPointerLeave={onCanvasPointerUp}
+            />
+
+            {needsTapToPlay ? (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="rounded-2xl bg-black/70 border border-white/15 text-white px-4 py-3 text-sm">
+                  <div className="font-semibold mb-1">Klik om beeld te starten</div>
+                  <div className="text-white/70 mb-3">Je browser blokkeert autoplay. Klik hieronder om de stream te starten.</div>
+                  <Button variant="primary" onClick={tapToPlay}>
+                    Start beeld
+                  </Button>
                 </div>
               </div>
-            </div>
+            ) : null}
+
+            {isFullscreen ? (
+              <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2 z-10">
+                Fullscreen — druk <b>ESC</b> om terug te gaan
+              </div>
+            ) : null}
           </div>
-        </ViewerStage>
-      </FullscreenShell>
-    </div>
+        </div>
+      </ViewerStage>
+    </FullscreenShell>
   );
 }
