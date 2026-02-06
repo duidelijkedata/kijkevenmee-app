@@ -143,7 +143,7 @@ export default function OuderStart() {
               K
             </div>
             <div className="leading-tight">
-              <div className="text-sm font-semibold text-slate-900">Kijk even mee</div>
+              <div className="text-sm font-semibold text-slate-900">kijk even mee</div>
               <div className="text-[11px] tracking-wide text-slate-500">OUDER DASHBOARD</div>
             </div>
           </div>
