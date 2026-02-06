@@ -378,6 +378,23 @@ export default function ShareClient({ code }: { code: string }) {
     await stopShare();
     setStatus("sharing");
 
+    // ✅ Markeer sessie pas als "gestart" wanneer de ouder daadwerkelijk op "Delen" klikt.
+    // Dit zorgt ervoor dat kind de sessieknop pas kan gebruiken vanaf dit moment.
+    try {
+      const res = await fetch("/api/sessions/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setDebugLine(`Sessie start signaal mislukt: ${j?.error ?? res.status}`);
+      }
+    } catch {
+      setDebugLine("Sessie start signaal mislukt: netwerkfout");
+    }
+
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });

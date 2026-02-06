@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
+export async function POST(req: Request) {
   const supabase = await supabaseServer();
   const { data: userData, error: userErr } = await supabase.auth.getUser();
   const user = userData?.user ?? null;
@@ -13,74 +13,46 @@ export async function POST() {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  // We gebruiken admin, want we willen altijd kunnen updaten
+  const body = await req.json().catch(() => ({}));
+  const code = String(body?.code ?? "").replace(/\D/g, "");
+
+  if (code.length !== 6) {
+    return NextResponse.json({ error: "code_required" }, { status: 400 });
+  }
+
   const admin = supabaseAdmin();
 
-  // Pak de nieuwste open sessie voor deze helper die nog niet gestart is
-  const { data: latest, error: findErr } = await admin
+  // Zet parent_started_at als de sessie bestaat en open is.
+  const { data: session, error } = await admin
     .from("sessions")
-    .select("id, code, status, requester_name, parent_started_at, created_at")
+    .update({ parent_started_at: new Date().toISOString() })
     .eq("helper_id", user.id)
+    .eq("code", code)
     .eq("status", "open")
     .is("parent_started_at", null)
-    .order("created_at", { ascending: false })
-    .limit(1)
+    .select("id, code, status, helper_id, requester_name, created_at, parent_started_at")
     .maybeSingle();
 
-  if (findErr) {
-    return NextResponse.json({ error: findErr.message }, { status: 400 });
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 400 });
   }
 
-  // Haal helper-naam op (voor UI bij het kind)
-  const { data: prof } = await admin
-    .from("profiles")
-    .select("display_name, full_name, name")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  const helperName =
-    String(prof?.display_name ?? prof?.full_name ?? prof?.name ?? "").trim() || "Ouder";
-
-  // Als er geen open sessie is, dan maken we er één (ouder initieert altijd).
-  // Dit maakt de flow ook robuuster.
-  if (!latest) {
-    // Genereer code (zelfde methode als bij create-linked)
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-
-    const { data: created, error: createErr } = await admin
+  // Als hij al gestart was, halen we de sessie alsnog op (idempotent gedrag).
+  if (!session) {
+    const { data: existing, error: readErr } = await admin
       .from("sessions")
-      .insert({
-        code,
-        status: "open",
-        helper_id: user.id,
-        requester_name: helperName,
-        parent_started_at: new Date().toISOString(),
-      })
-      .select("id, code, status, requester_name, parent_started_at, created_at")
-      .single();
+      .select("id, code, status, helper_id, requester_name, created_at, parent_started_at")
+      .eq("helper_id", user.id)
+      .eq("code", code)
+      .eq("status", "open")
+      .maybeSingle();
 
-    if (createErr) {
-      return NextResponse.json({ error: createErr.message }, { status: 400 });
+    if (readErr) {
+      return NextResponse.json({ error: readErr.message }, { status: 400 });
     }
 
-    return NextResponse.json({ session: created });
+    return NextResponse.json({ session: existing ?? null });
   }
 
-  // Anders: markeer die sessie als gestart
-  const { data: started, error: upErr } = await admin
-    .from("sessions")
-    .update({
-      parent_started_at: new Date().toISOString(),
-      // requester_name vullen als leeg (handig voor kind-lampje)
-      requester_name: latest.requester_name || helperName,
-    })
-    .eq("id", latest.id)
-    .select("id, code, status, requester_name, parent_started_at, created_at")
-    .single();
-
-  if (upErr) {
-    return NextResponse.json({ error: upErr.message }, { status: 400 });
-  }
-
-  return NextResponse.json({ session: started });
+  return NextResponse.json({ session });
 }

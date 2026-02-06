@@ -22,7 +22,7 @@ export async function POST(req: Request) {
   let auto_assigned = false;
   let assign_reason: string | null = null;
 
-  // ✅ Als ouder ingelogd is en requester_name leeg is -> pak display_name uit profiel
+  // ✅ NEW: als ouder ingelogd is en requester_name leeg is -> pak display_name uit profiel
   try {
     const supabase = await supabaseServer();
     const { data } = await supabase.auth.getUser();
@@ -94,22 +94,20 @@ export async function POST(req: Request) {
   const admin = supabaseAdmin();
   const code = generateCode();
 
-  // ✅ Ouder initieert sessie: markeer meteen als "gestart"
-  const nowIso = new Date().toISOString();
-
+  // ✅ Belangrijk: hier NIET parent_started_at zetten.
+  // parent_started_at wordt gezet bij de daadwerkelijke "Delen" actie (share-client).
   const insertPayload: Record<string, any> = {
     code,
     status: "open",
     requester_name,
     requester_note,
-    parent_started_at: nowIso,
   };
   if (helper_id) insertPayload.helper_id = helper_id;
 
   const { data: session, error } = await admin
     .from("sessions")
     .insert(insertPayload)
-    .select("id, code, status, helper_id, requester_name, parent_started_at, created_at")
+    .select("id, code, status, helper_id, requester_name, created_at, parent_started_at")
     .single();
 
   if (error) {
