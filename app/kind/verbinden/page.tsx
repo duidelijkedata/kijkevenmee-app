@@ -180,6 +180,11 @@ export default function KindVerbinden() {
 
     activeSourceRef.current = "screen";
     setActiveSource("screen");
+
+    // 🧽 tekenlaag resetten
+    setDrawing(null);
+    setShapes([]);
+    redrawCanvas([]);
   }
 
   useEffect(() => {
@@ -248,6 +253,44 @@ export default function KindVerbinden() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useKoppelcode, connected, status]);
+
+  // ✅ Canvas size sync (FIX)
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const c = canvasRef.current;
+    if (!wrap || !c) return;
+
+    const sync = () => {
+      const rect = wrap.getBoundingClientRect();
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+
+      // CSS size
+      c.style.width = `${rect.width}px`;
+      c.style.height = `${rect.height}px`;
+
+      // internal buffer size
+      const nextW = Math.max(1, Math.round(rect.width * dpr));
+      const nextH = Math.max(1, Math.round(rect.height * dpr));
+
+      if (c.width !== nextW) c.width = nextW;
+      if (c.height !== nextH) c.height = nextH;
+
+      // redraw existing shapes
+      redrawCanvas(shapes);
+    };
+
+    sync();
+
+    const ro = new ResizeObserver(() => sync());
+    ro.observe(wrap);
+
+    window.addEventListener("resize", sync);
+    return () => {
+      window.removeEventListener("resize", sync);
+      ro.disconnect();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shapes.length]);
 
   async function connect(rawOverride?: string) {
     const raw = String(rawOverride ?? code).replace(/\D/g, "");
@@ -536,10 +579,13 @@ export default function KindVerbinden() {
     const ctx = c.getContext("2d");
     if (!ctx) return;
 
-    const w = c.width;
-    const h = c.height;
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const wCss = c.width / dpr;
+    const hCss = c.height / dpr;
 
-    ctx.clearRect(0, 0, w, h);
+    // reset + scale to CSS pixels
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, wCss, hCss);
 
     ctx.save();
     ctx.lineWidth = 3;
@@ -623,24 +669,27 @@ export default function KindVerbinden() {
     }
   }
 
+  // ✅ pointer mapping FIX: canvas zit mee in transform, dus deel door zoom (geen -pan meer)
   function onCanvasPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!annotate) return;
-    if (!wrapRef.current) return;
 
-    const rect = wrapRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left - pan.x) / zoom;
-    const y = (e.clientY - rect.top - pan.y) / zoom;
+    const c = canvasRef.current;
+    if (!c) return;
+    const rect = c.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / zoom;
+    const y = (e.clientY - rect.top) / zoom;
 
     setDrawing({ startX: x, startY: y, currentX: x, currentY: y });
   }
 
   function onCanvasPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!drawing) return;
-    if (!wrapRef.current) return;
 
-    const rect = wrapRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left - pan.x) / zoom;
-    const y = (e.clientY - rect.top - pan.y) / zoom;
+    const c = canvasRef.current;
+    if (!c) return;
+    const rect = c.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / zoom;
+    const y = (e.clientY - rect.top) / zoom;
 
     const nextDrawing = { ...drawing, currentX: x, currentY: y };
     setDrawing(nextDrawing);
@@ -697,7 +746,9 @@ export default function KindVerbinden() {
           {!useKoppelcode ? (
             <div className="rounded-xl border bg-white p-3">
               <div className="text-sm font-semibold">Sessie</div>
-              <div className="text-xs text-slate-600 mt-1">Ouder start altijd de sessie. Jij kunt pas starten als er een sessie klaarstaat.</div>
+              <div className="text-xs text-slate-600 mt-1">
+                Ouder start altijd de sessie. Jij kunt pas starten als er een sessie klaarstaat.
+              </div>
 
               <div className="mt-2 flex items-center gap-2 text-xs">
                 <span
@@ -725,17 +776,11 @@ export default function KindVerbinden() {
                   Start
                 </Button>
 
-                <Button
-                  variant="secondary"
-                  className="w-full"
-                  disabled={!canEndSession}
-                  onClick={() => void disconnect()}
-                >
+                <Button variant="secondary" className="w-full" disabled={!canEndSession} onClick={() => void disconnect()}>
                   Stop
                 </Button>
               </div>
 
-              {/* ✅ Duidelijke reden als start disabled is */}
               <div className="mt-1 text-xs text-slate-500">
                 {!parentOnline && "Wachten tot ouder een sessie start…"}
                 {parentOnline && !activeSessions.length && "Geen actieve sessies gevonden."}
@@ -746,13 +791,7 @@ export default function KindVerbinden() {
               <div className="mt-2 text-xs text-slate-600">
                 Status:{" "}
                 <span className="font-semibold">
-                  {status === "idle"
-                    ? "Niet verbonden"
-                    : status === "connecting"
-                      ? "Verbinden…"
-                      : status === "connected"
-                        ? "Verbonden"
-                        : "Fout"}
+                  {status === "idle" ? "Niet verbonden" : status === "connecting" ? "Verbinden…" : status === "connected" ? "Verbonden" : "Fout"}
                 </span>
                 {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
               </div>
@@ -772,13 +811,7 @@ export default function KindVerbinden() {
               <div className="mt-2 text-xs text-slate-500">
                 Status:{" "}
                 <span className="font-semibold">
-                  {status === "idle"
-                    ? "Niet verbonden"
-                    : status === "connecting"
-                      ? "Verbinden…"
-                      : status === "connected"
-                        ? "Verbonden"
-                        : "Fout"}
+                  {status === "idle" ? "Niet verbonden" : status === "connecting" ? "Verbinden…" : status === "connected" ? "Verbonden" : "Fout"}
                 </span>
                 {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
               </div>
@@ -789,7 +822,7 @@ export default function KindVerbinden() {
             <div className="text-sm font-semibold">Aantekeningen</div>
 
             <div className="mt-3 flex flex-col gap-2">
-              <Button onClick={() => setAnnotate((v) => !v)}>{annotate ? "Tekenen aan" : "Tekenen uit"}</Button>
+              <Button onClick={() => setAnnotate((v) => !v)}>{annotate ? "Tekenen uit" : "Tekenen aan"}</Button>
 
               <div className="flex gap-2">
                 <Button variant={tool === "circle" ? "primary" : "secondary"} onClick={() => setTool("circle")}>
@@ -862,6 +895,7 @@ export default function KindVerbinden() {
               Bron: <span className="font-semibold">{activeSource === "camera" ? "Telefoon camera" : "PC scherm"}</span>
             </div>
 
+            {/* ✅ video + canvas samen in dezelfde transform-laag */}
             <div
               className="absolute inset-0"
               style={{
@@ -869,19 +903,19 @@ export default function KindVerbinden() {
                 transformOrigin: "center center",
               }}
             >
-              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
-            </div>
+              <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
 
-            <canvas
-              ref={canvasRef}
-              className="absolute inset-0"
-              style={{ pointerEvents: annotate ? "auto" : "none" }}
-              onPointerDown={onCanvasPointerDown}
-              onPointerMove={onCanvasPointerMove}
-              onPointerUp={onCanvasPointerUp}
-              onPointerCancel={onCanvasPointerUp}
-              onPointerLeave={onCanvasPointerUp}
-            />
+              <canvas
+                ref={canvasRef}
+                className="absolute inset-0"
+                style={{ pointerEvents: annotate ? "auto" : "none" }}
+                onPointerDown={onCanvasPointerDown}
+                onPointerMove={onCanvasPointerMove}
+                onPointerUp={onCanvasPointerUp}
+                onPointerCancel={onCanvasPointerUp}
+                onPointerLeave={onCanvasPointerUp}
+              />
+            </div>
 
             {needsTapToPlay ? (
               <div className="absolute inset-0 flex items-center justify-center">
