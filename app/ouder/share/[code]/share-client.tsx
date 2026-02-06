@@ -358,7 +358,7 @@ export default function ShareClient({ code }: { code: string }) {
     }, 1200);
   }
 
-  async function stopShare() {
+  async function stopShare(opts?: { signalStop?: boolean }) {
     stopStatsLoop();
 
     try {
@@ -371,11 +371,33 @@ export default function ShareClient({ code }: { code: string }) {
     } catch {}
     streamRef.current = null;
 
+
+const shouldSignalStop = opts?.signalStop ?? true;
+
+// ✅ Signaleer dat delen is gestopt, zodat kind terugvalt naar "uit-stand"
+// (alleen wanneer dit een echte 'Stop delen' actie is, niet bij pre-cleanup voor opnieuw delen)
+if (shouldSignalStop) {
+  try {
+    const res = await fetch("/api/sessions/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      setDebugLine(`Sessie stop signaal mislukt: ${j?.error ?? res.status}`);
+    }
+  } catch {
+    setDebugLine("Sessie stop signaal mislukt: netwerkfout");
+  }
+}
+
     setStatus("idle");
   }
 
   async function startShare() {
-    await stopShare();
+    await stopShare({ signalStop: false });
     setStatus("sharing");
 
     // ✅ Markeer sessie pas als "gestart" wanneer de ouder daadwerkelijk op "Delen" klikt.
