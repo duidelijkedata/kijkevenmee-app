@@ -69,7 +69,7 @@ export default function KindVerbinden() {
 
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
-  // ✅ Feedback tijdens verbinden
+
   const [connectHint, setConnectHint] = useState<string | null>(null);
   const gotAnySignalRef = useRef(false);
   const waitHintTimerRef = useRef<number | null>(null);
@@ -91,18 +91,18 @@ export default function KindVerbinden() {
   const activeSourceRef = useRef<ActiveSource>("screen");
   const [activeSource, setActiveSource] = useState<ActiveSource>("screen");
 
-  // Canvas + annotate (bestond al)
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   const [annotate, setAnnotate] = useState(false);
   const [tool, setTool] = useState<DrawTool>("circle");
 
-  const [drawing, setDrawing] = useState<null | { startX: number; startY: number; currentX: number; currentY: number }>(null);
+  const [drawing, setDrawing] = useState<null | { startX: number; startY: number; currentX: number; currentY: number }>(
+    null
+  );
   const [shapes, setShapes] = useState<DraftShape[]>([]);
   const [needsTapToPlay, setNeedsTapToPlay] = useState(false);
 
-  // pan/zoom (bestond al)
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
@@ -159,7 +159,6 @@ export default function KindVerbinden() {
 
     attachStream(null);
 
-    // ✅ Clear "wachten op ouder" hint/timer
     if (waitHintTimerRef.current) {
       window.clearTimeout(waitHintTimerRef.current);
       waitHintTimerRef.current = null;
@@ -222,6 +221,7 @@ export default function KindVerbinden() {
 
     const tick = async () => {
       if (stopped) return;
+
       await refreshActiveSessions();
 
       // Als we verbonden zijn en de sessie verdwijnt (ouder verbreekt), val terug naar idle.
@@ -253,10 +253,10 @@ export default function KindVerbinden() {
     currentSessionCodeRef.current = raw;
     setStatus("connecting");
 
-    // ✅ Feedback tijdens verbinden
     setConnectHint("Verbinden…");
     gotAnySignalRef.current = false;
     const attempt = ++connectAttemptRef.current;
+
     if (waitHintTimerRef.current) {
       window.clearTimeout(waitHintTimerRef.current);
       waitHintTimerRef.current = null;
@@ -270,14 +270,12 @@ export default function KindVerbinden() {
     activeSourceRef.current = "screen";
     setActiveSource("screen");
 
-    // ===== Signaling channels =====
     const ch = supabase.channel(`signal:${raw}`);
     channelRef.current = ch;
 
     const chCam = supabase.channel(`signalcam:${raw}`);
     channelCamRef.current = chCam;
 
-    // ===== PC (screen) peer =====
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
@@ -303,11 +301,9 @@ export default function KindVerbinden() {
       }
     };
 
-    // ===== Phone camera peer =====
     const pcCam = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
-
     pcCamRef.current = pcCam;
 
     pcCam.ontrack = (ev) => {
@@ -330,11 +326,9 @@ export default function KindVerbinden() {
       }
     };
 
-    // ===== Screen signaling =====
     ch.on("broadcast", { event: "signal" }, async (payload: any) => {
       const msg = payload.payload as SignalMsg;
 
-      // ✅ Zodra we iets ontvangen weten we dat de ouder "aan" staat
       gotAnySignalRef.current = true;
       if (waitHintTimerRef.current) {
         window.clearTimeout(waitHintTimerRef.current);
@@ -367,8 +361,6 @@ export default function KindVerbinden() {
           await pc0.addIceCandidate(msg.candidate);
         } else if (msg.type === "quality") {
           setRemoteQuality(msg.quality);
-        } else if (msg.type === "draw_packet") {
-          // (bestond al) hier wordt in jouw code waarschijnlijk elders verwerkt; we laten het ongewijzigd.
         } else if (msg.type === "active_source") {
           activeSourceRef.current = msg.source;
           setActiveSource(msg.source);
@@ -376,7 +368,7 @@ export default function KindVerbinden() {
           if (msg.source === "screen") {
             if (screenStreamRef.current) attachStream(screenStreamRef.current);
           } else if (msg.source === "camera") {
-            // ✅ voorkom zwart als cam-stream nog niet binnen is
+            // voorkom zwart als cam-stream nog niet binnen is
             if (camStreamRef.current) attachStream(camStreamRef.current);
           }
         }
@@ -391,11 +383,9 @@ export default function KindVerbinden() {
       }
     });
 
-    // ===== Camera signaling =====
     chCam.on("broadcast", { event: "signal" }, async (payload: any) => {
       const msg = payload.payload as SignalMsg;
 
-      // ✅ Ook camera-signalen tellen als "ouder leeft"
       gotAnySignalRef.current = true;
       if (waitHintTimerRef.current) {
         window.clearTimeout(waitHintTimerRef.current);
@@ -506,7 +496,6 @@ export default function KindVerbinden() {
       const nx = (p.x - mx) * scale + mx;
       const ny = (p.y - my) * scale + my;
 
-      // hard cap zodat je niet "kwijt" raakt
       const cap = 300;
       return {
         x: clamp(nx, -cap, cap),
@@ -528,7 +517,6 @@ export default function KindVerbinden() {
     const dx = e.clientX - start.x;
     const dy = e.clientY - start.y;
 
-    // hard cap zodat je niet “kwijt” raakt
     const cap = 300;
     setPan({ x: clamp(start.px + dx, -cap, cap), y: clamp(start.py + dy, -cap, cap) });
   }
@@ -620,7 +608,6 @@ export default function KindVerbinden() {
     const packet = canvasToPacket();
     if (!packet) return;
 
-    // broadcast via screen channel (bestond al)
     try {
       await channelRef.current.send({
         type: "broadcast",
@@ -641,13 +628,7 @@ export default function KindVerbinden() {
     const x = (e.clientX - rect.left - pan.x) / zoom;
     const y = (e.clientY - rect.top - pan.y) / zoom;
 
-    if (tool === "circle") {
-      setDrawing({ startX: x, startY: y, currentX: x, currentY: y });
-    } else if (tool === "rect") {
-      setDrawing({ startX: x, startY: y, currentX: x, currentY: y });
-    } else if (tool === "arrow") {
-      setDrawing({ startX: x, startY: y, currentX: x, currentY: y });
-    }
+    setDrawing({ startX: x, startY: y, currentX: x, currentY: y });
   }
 
   function onCanvasPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
@@ -661,7 +642,6 @@ export default function KindVerbinden() {
     const nextDrawing = { ...drawing, currentX: x, currentY: y };
     setDrawing(nextDrawing);
 
-    // preview
     const draft = draftFromDrawing(nextDrawing, tool);
     if (draft) redrawCanvas([...shapes, draft]);
   }
@@ -708,7 +688,6 @@ export default function KindVerbinden() {
         <div className="p-3 flex flex-col gap-3">
           <div className="text-sm font-semibold">Kind – verbinden</div>
 
-          {/* Active sessions (als useKoppelcode uit staat) */}
           {!useKoppelcode ? (
             <div className="rounded-xl border bg-white p-3">
               <div className="text-sm font-semibold">Actieve sessies</div>
@@ -724,24 +703,6 @@ export default function KindVerbinden() {
 
               {sessionNotice ? <div className="mt-2 text-xs text-slate-700">{sessionNotice}</div> : null}
 
-              {activeError ? <div className="mt-2 text-xs text-red-700">{activeError}</div> : null}
-
-              {/* ✅ Status + hint */}
-              <div className="mt-2 text-xs text-slate-600">
-                Status:{" "}
-                <span className="font-semibold">
-                  {status === "idle"
-                    ? "Niet verbonden"
-                    : status === "connecting"
-                      ? "Verbinden…"
-                      : status === "connected"
-                        ? "Verbonden"
-                        : "Fout"}
-                </span>
-                {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
-              </div>
-
-              {/* ✅ De knop wordt pas actief als ouder een sessie gestart heeft */}
               <div className="mt-3">
                 <Button
                   variant="primary"
@@ -756,7 +717,22 @@ export default function KindVerbinden() {
                 </Button>
               </div>
 
-              {/* Optioneel: sessielijst blijft bruikbaar (handig bij meerdere sessies) */}
+              {activeError ? <div className="mt-2 text-xs text-red-700">{activeError}</div> : null}
+
+              <div className="mt-2 text-xs text-slate-600">
+                Status:{" "}
+                <span className="font-semibold">
+                  {status === "idle"
+                    ? "Niet verbonden"
+                    : status === "connecting"
+                      ? "Verbinden…"
+                      : status === "connected"
+                        ? "Verbonden"
+                        : "Fout"}
+                </span>
+                {connectHint ? <div className="mt-1 text-xs text-slate-500">{connectHint}</div> : null}
+              </div>
+
               <div className="mt-3 flex flex-col gap-2">
                 {activeSessions.length ? (
                   activeSessions.map((s) => (
@@ -821,7 +797,13 @@ export default function KindVerbinden() {
                 </Button>
               </div>
 
-              <Button onClick={() => { setShapes([]); redrawCanvas([]); }} disabled={!shapes.length}>
+              <Button
+                onClick={() => {
+                  setShapes([]);
+                  redrawCanvas([]);
+                }}
+                disabled={!shapes.length}
+              >
                 Wis
               </Button>
 
@@ -858,19 +840,11 @@ export default function KindVerbinden() {
         </div>
       }
     >
-      <ViewerStage
-        wrapRef={wrapRef}
-        isFullscreen={isFullscreen}
-        onFullscreenChange={setIsFullscreen}
-        rightTop={
-          <div className="rounded-full bg-white/90 px-3 py-1 text-xs text-slate-800">
-            Bron: <span className="font-semibold">{activeSource === "camera" ? "Telefoon camera" : "PC scherm"}</span>
-          </div>
-        }
-      >
-        <div className="relative w-full h-full bg-black">
+      <ViewerStage>
+        <div className="h-full w-full flex items-center justify-center bg-black">
           <div
-            className="absolute inset-0"
+            ref={wrapRef}
+            className="relative w-full h-full overflow-hidden"
             onWheel={onWheel}
             onPointerDown={onPointerDownPan}
             onPointerMove={onPointerMovePan}
@@ -878,6 +852,13 @@ export default function KindVerbinden() {
             onPointerCancel={onPointerUpPan}
             style={{ touchAction: annotate ? "none" : "pan-x pan-y" }}
           >
+            <div
+              className="absolute top-3 right-3 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-800 z-10"
+              aria-label="actieve bron"
+            >
+              Bron: <span className="font-semibold">{activeSource === "camera" ? "Telefoon camera" : "PC scherm"}</span>
+            </div>
+
             <div
               className="absolute inset-0"
               style={{
@@ -912,7 +893,7 @@ export default function KindVerbinden() {
             ) : null}
 
             {isFullscreen ? (
-              <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2">
+              <div className="absolute top-3 left-3 rounded-xl bg-black/60 text-white text-sm px-3 py-2 z-10">
                 Fullscreen — druk <b>ESC</b> om terug te gaan
               </div>
             ) : null}
