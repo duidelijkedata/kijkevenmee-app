@@ -249,7 +249,7 @@ export default function OuderStart() {
 
                       <Button
                         variant="primary"
-                        className="mt-6 h-12 w-full rounded-2xl bg-indigo-300 text-white cursor-not-allowed bg-indigo-600 hover:bg-indigo-700 text-white"
+                        className="mt-6 h-12 w-full rounded-2xl bg-indigo-300 text-white"
                         onClick={start}
                         disabled={loading}
                       >
